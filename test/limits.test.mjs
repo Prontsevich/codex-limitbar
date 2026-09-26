@@ -32,10 +32,15 @@ test('both windows, reset credits and plan', () => {
   const b = bucket();
   const r = parseLimits({ rateLimits: b, rateLimitsByLimitId: { codex: b }, rateLimitResetCredits: { availableCount: 3, credits: [] } }, NOW);
   assert.deepEqual(r.limits, [
-    { name: '5h', usedPercent: 12, resetsAtMs: 1787203791000 },
-    { name: 'Weekly', usedPercent: 73, resetsAtMs: 1787800000000 },
+    { name: '5h', usedPercent: 12, resetsAtMs: 1787203791000, windowDurationMins: 300 },
+    { name: 'Weekly', usedPercent: 73, resetsAtMs: 1787800000000, windowDurationMins: 10080 },
   ]);
-  assert.deepEqual(r.meta, { live: true, planType: 'plus', resetCredits: 3, updatedAtMs: NOW });
+  assert.deepEqual(r.meta, {
+    live: true, planType: 'plus', resetCredits: 3,
+    resetCreditsNextExpiresAtMs: null, resetCreditTitle: null,
+    limitReached: null, spendControlReached: false, usageAllowed: true,
+    updatedAtMs: NOW,
+  });
 });
 
 test('weekly-only account (secondary null) yields one limit', () => {
@@ -73,6 +78,46 @@ test('missing reset time and missing reset credits', () => {
   assert.equal(r.meta.planType, null);
 });
 
+// Shape observed on ChatGPT 26.924 (bundled CLI 0.158.0-alpha.2.1).
+const credit = (over = {}) => Object.assign({
+  id: 'RateLimitResetCredit_secret', resetType: 'codexRateLimits', status: 'available',
+  grantedAt: 1788485573, expiresAt: 1791077573,
+  title: 'Full reset (Weekly + 5 hr)', description: 'Thanks for using Codex!',
+}, over);
+
+test('reset credits: earliest available expiry, title only, no ids/descriptions', () => {
+  const rc = { availableCount: 2, credits: [
+    credit({ expiresAt: 1792699499, title: 'Later' }),
+    credit({ expiresAt: 1790000100, status: 'used', title: 'Used one' }),
+    credit({ expiresAt: 1791077573, title: '  Full reset (Weekly + 5 hr)  ' }),
+  ] };
+  const r = parseLimits({ rateLimits: bucket(), rateLimitResetCredits: rc, accountId: 'acc_x', rateLimitUpsell: { a: 1 } }, NOW);
+  assert.equal(r.meta.resetCredits, 2);
+  assert.equal(r.meta.resetCreditsNextExpiresAtMs, 1791077573000);
+  assert.equal(r.meta.resetCreditTitle, 'Full reset (Weekly + 5 hr)');
+  const json = JSON.stringify(r);
+  for (const leak of ['RateLimitResetCredit', 'Thanks for using', 'acc_x', 'Upsell']) assert.ok(!json.includes(leak), leak);
+});
+
+test('reset credits: missing, empty or all unavailable', () => {
+  for (const rc of [undefined, null, { availableCount: 0 }, { availableCount: 0, credits: [credit({ status: 'expired' })] }]) {
+    const r = parseLimits({ rateLimits: bucket(), rateLimitResetCredits: rc }, NOW);
+    assert.equal(r.meta.resetCreditsNextExpiresAtMs, null);
+    assert.equal(r.meta.resetCreditTitle, null);
+  }
+});
+
+test('limit-reached, spend-control and usage-allowed flags', () => {
+  const r = parseLimits({ rateLimits: bucket({ rateLimitReachedType: 'weekly', spendControlReached: true }), ordinaryUsageAllowed: false }, NOW);
+  assert.equal(r.meta.limitReached, 'weekly');
+  assert.equal(r.meta.spendControlReached, true);
+  assert.equal(r.meta.usageAllowed, false);
+  const ok = parseLimits({ rateLimits: bucket() }, NOW);
+  assert.equal(ok.meta.limitReached, null);
+  assert.equal(ok.meta.spendControlReached, false);
+  assert.equal(ok.meta.usageAllowed, true);
+});
+
 test('garbage and empty input produce errors, never throw', () => {
   assert.ok(parseLimits(null).error);
   assert.ok(parseLimits(undefined).error);
@@ -85,11 +130,13 @@ test('garbage and empty input produce errors, never throw', () => {
 
 test('codexCandidates: bundled CLI first, platform-aware', () => {
   const mac = codexCandidates({ app: '/Applications/ChatGPT.app', env: { PATH: '/usr/bin:/opt/x' }, platform: 'darwin', home: '/Users/u' });
-  assert.equal(mac[0], '/Applications/ChatGPT.app/Contents/Resources/codex');
+  assert.equal(mac[0], '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex');
+  assert.equal(mac[1], '/Applications/ChatGPT.app/Contents/Resources/codex');
   assert.ok(mac.includes('/opt/x/codex'));
   assert.ok(mac.includes('/Users/u/.local/bin/codex'));
   const win = codexCandidates({ app: 'C:\\Apps\\ChatGPT', env: { PATH: '' }, platform: 'win32', home: 'C:\\Users\\u' });
   assert.equal(path.basename(win[0]), 'codex.exe');
+  assert.ok(win[0].includes('codex-cli'));
   assert.ok(!win.includes('/opt/homebrew/bin/codex'));
 });
 

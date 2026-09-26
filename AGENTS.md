@@ -30,7 +30,8 @@ DevTools Protocol — no bundle modification. Two parts:
   method depends on zero disk changes; the signature and TCC permissions stay
   intact.
 - **All runtime identifiers use the `spr` prefix**: `__sprBar*` window hooks,
-  `__sprBarState` / `__sprBarInstance`, `#spr-statusbar`, `#spr-statusbar-style`,
+  `__sprBarState` / `__sprBarInstance`, the CDP binding `__sprBarRefreshBinding`,
+  `#spr-statusbar`, `#spr-statusbar-panel`, `#spr-statusbar-style`,
   `data-spr-padded` / `data-spr-orig-pad` / `data-spr-version`,
   `spr-statusbar-mode` (localStorage key), state dir
   `~/Library/Application Support/spr-limitbar/`, log
@@ -49,6 +50,9 @@ DevTools Protocol — no bundle modification. Two parts:
 - **The bar reserves layout space** (padding on the app's layout container) —
   it never overlays app UI. No layout found → no bar. Verify with hit tests and
   a zero covered-visible count (see `skills/codex-limitbar/references/internals.md`).
+  The details panel is the one exception: a transient overlay the user opens,
+  closed by outside click / Escape / blur, kept below the app's modals
+  (z-index 29 vs the app's z-30 layer).
 - **Colors come from the app's theme tokens** (`--app-color-*` and related,
   with fallbacks) — no hardcoded theme colors; theme switching must work with
   no JS.
@@ -57,7 +61,8 @@ DevTools Protocol — no bundle modification. Two parts:
   globals. Every entry point that evaluates code runs it first.
 - **Verify against the live app, not the editor**: install, then project the
   bar's state into a small JSON (version, `textContent`, DOM counts, padding)
-  and capture the actual region. A look at the real pixels beats reading the
+  and capture the actual region. Captures must never show the user's sidebar
+  or chats: clip to the bar, or blur `#root` temporarily for panel shots. A look at the real pixels beats reading the
   diff.
 
 ## Conventions
@@ -89,8 +94,15 @@ bash -n start.sh install.sh uninstall.sh install-skills.sh raycast/codex-limitba
 2. Reload the window (`-e 'location.reload()'`) — the log must show
    `reload: bar present`, and the bar must come back with live numbers.
 3. `./start.sh --capture` (or `cdp-eval.mjs … --png out.png`) and LOOK at the
-   image, in both themes if you touched styles.
-4. `./start.sh --stop` — the bar disappears and the padding is restored.
+   image, in both themes if you touched styles. These capture the whole window —
+   keep them local; see the capture notes in `internals.md` before sharing any.
+4. Panel: `-e '__sprBarSetPanel(true)'`, check it renders and closes on an
+   outside `pointerdown` / Escape; press its refresh button — the log shows
+   `limits live (manual)`.
+5. `./start.sh --stop` — bar and panel disappear and the padding is restored.
+
+`cdp-eval.mjs -e` runs in the page's global scope: wrap multi-statement
+expressions in an IIFE, or a second `const x` in a later call throws.
 
 To test a `bar.js` edit without restarting the agent: `./start.sh --stop`,
 then `./start.sh` (it re-attaches to the open port with the new file).

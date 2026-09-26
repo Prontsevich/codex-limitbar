@@ -27,7 +27,8 @@ ChatGPT 26.917 the bar was installed through the Electron main-process inspector
 3. **Attach**: one browser-level websocket; `Target.setDiscoverTargets` + `Target.getTargets`;
    every eligible page (`isShellUrl`: exact shell URL or `app://-/index.html?…` without
    `avatar-overlay`) gets `Target.attachToTarget({flatten: true})` → `Page.enable`,
-   `Runtime.enable`, `Page.addScriptToEvaluateOnNewDocument({source: bar.js})` and an
+   `Runtime.enable`, `Runtime.addBinding({name: '__sprBarRefreshBinding'})` (not for
+   `--once`), `Page.addScriptToEvaluateOnNewDocument({source: bar.js})` and an
    immediate `Runtime.evaluate(bar.js)`. Concurrent attach requests for one target (the
    `targetCreated` burst vs the `getTargets` pass) share one in-flight promise.
 4. **Reloads**: on `Page.loadEventFired` the agent checks
@@ -41,11 +42,21 @@ ChatGPT 26.917 the bar was installed through the Electron main-process inspector
 6. **Lifetime**: when the browser websocket closes (app quit / relaunch) the agent retries
    the same port for 30 s — the app may relaunch itself with the same argv (its Node
    permission-model restart) — then removes the state file and exits. SIGTERM/SIGINT:
-   `__sprBarRemove()` in every page, `Page.removeScriptToEvaluateOnNewDocument`, detach,
-   exit 0. `--once` injects + pushes (+ captures) and disconnects without touching the
+   `__sprBarRemove()` in every page, `Runtime.removeBinding`,
+   `Page.removeScriptToEvaluateOnNewDocument`, detach, exit 0. `--once` injects + pushes (+ captures) and disconnects without touching the
    running agent's state; the bar stays until the next reload.
 
 The port itself cannot be closed from CDP: it lives until the app process exits.
+
+## Refresh channel (page → agent)
+
+The panel's refresh button calls `window.__sprBarRefreshBinding('refresh')`, a CDP binding
+the agent adds per session (bindings survive reloads within the session). The agent gets
+`Runtime.bindingCalled` and runs `poll('manual')` — or, if the last read is under 10 s old,
+logs `manual refresh throttled` and re-pushes the current numbers. Either way it then
+evaluates `__sprBarRefreshDone()` so the spinner stops; the page also gives up after 20 s
+(an agent that died leaves a stale binding function behind). Without the binding (`--once`,
+an older agent) the refresh button is not rendered.
 
 ## Layout: reserve space, never overlay
 
@@ -81,7 +92,10 @@ fallback; theme changes need no JS.
 | Percent text by remaining ≥ 50 / ≥ 25 / ≥ 10 / < 10 | `--app-color-text-success`, `--color-text-caution-surface`, `--app-color-text-warning`, `--app-color-text-error` |
 | Mini-bar fills (same thresholds) | `--app-color-accent-green` / `-yellow` / `-orange` / `-red` |
 | Mini-bar track | `--switch-track-color` |
-| used/left toggle (mirrors the Chat/Work toggle) | `--color-background-mode-toggle-track`, `-selected`, `--color-border-mode-toggle-selected`, `--color-text-mode-toggle-primary`, `-inactive` |
+| used/left toggle in the panel (mirrors the Chat/Work toggle) | `--color-background-mode-toggle-track`, `-selected`, `--color-border-mode-toggle-selected`, `--color-text-mode-toggle-primary`, `-inactive` |
+| Bar hover / expanded, panel badge | `--menu-item-background-color` |
+| Panel surface, shadow, radius, font size, separators | `--menu-background-color`, `--menu-box-shadow`, `--popover-radius`, `--menu-font-size`, `--menu-separator-background-color` |
+| Status dot live / stale / no data | `--app-color-accent-green` / `-orange`, tertiary text |
 | Font | `--font-ui-family` |
 | `LIMITS` label | `--font-small-caps-md-size`, `-weight`, `-tracking` |
 | Fallback strip (`.spr-flat`) | `--app-color-background-surface-under`, `--app-color-border` |
@@ -95,25 +109,47 @@ fallback; theme changes need no JS.
   previous instance's `remove()` first. Hence: **bump `BAR_VERSION` on every edit**.
 - Before the DOM is ready (new-document script) the payload waits for `DOMContentLoaded`
   (returns `"deferred"`); React mounting is then picked up by the observer.
-- `__sprBarRemove()` removes the bar and style node, restores padding exactly, disconnects
-  both observers, clears the interval and the `resize` listener, and deletes the window
-  hooks.
+- `__sprBarRemove()` closes the panel (removing its document/window listeners), removes the
+  bar, panel and style nodes, restores padding exactly, disconnects both observers, clears
+  the intervals, refresh timer and the `resize` listener, and deletes the window hooks.
 - Display mode persists in `localStorage['spr-statusbar-mode']` (`uninstall.sh` clears it
   while the agent's port is known).
 
 ## States
 
 - No limits yet → `waiting for data…`.
-- `__sprBarSetLimits([], {error})` → `limits unavailable` (error in the tooltip).
-- Limits present → blocks + `used/left` toggle + note `live · updated HH:MM`; the note turns
-  `stale` when `!live`, when `updatedAtMs` is older than 15 min, or when `meta.error` is set
-  alongside the last good limits.
-- ≤ 900 px wide: note hidden; ≤ 720 px: label and reset times hidden.
+- `__sprBarSetLimits([], {error})` → `limits unavailable` (the error is in the panel).
+- Limits present → blocks, then a status dot + chevron at the right end. The dot is green
+  when live, orange when stale: `!live`, `updatedAtMs` older than 15 min, or `meta.error`
+  set alongside the last good limits. The bar's `title` says `live|stale · updated HH:MM`.
+- ≤ 720 px wide: label and reset times hidden.
+
+## Details panel
+
+- The bar is a button (`role=button`, `tabindex=0`, `aria-haspopup=dialog`,
+  `aria-controls`, `aria-expanded`); click or Enter/Space toggles
+  `#spr-statusbar-panel` (`role=dialog`). `__sprBarSetPanel(open)` does the same.
+- The panel is the **one transient overlay**: user-opened, it may cover app UI while open.
+  `position: fixed`, left-aligned with the bar (clamped into the viewport), bottom 6 px
+  above the bar, width `min(320px, 100vw − 24px)`, `max-height` down to the window top with
+  internal scroll. `z-index: 29` — above page content and the bar (25), below the app's
+  z-30 overlay layer and its modals/menus, so an app dialog is never hidden behind it.
+- Closes on an outside `pointerdown` (capture), Escape (focus returns to the bar), a second
+  bar click, window `blur`, a missing layout, `__sprBarRemove()` and any hot-swap.
+- Content: header (`Codex`, plan badge, `Updated … ago` + dot, refresh button), one block per
+  window (title from `windowDurationMins`: 5-hour / Daily / N-day / Weekly), reset credits
+  (count, next expiry, title — no "Reset now" action), warnings (`limitReached`,
+  `spendControlReached`, `usageAllowed: false`, `meta.error`), and the `Show used|left`
+  toggle. Relative times re-render every 10 s while open. All dynamic text goes through
+  `esc()`.
+- `font-variant-numeric: tabular-nums` only on numeric rows: Inter's `tnum` also widens
+  the hyphen ("5 - hour").
 
 ## Live data path
 
-- `lib/limits.mjs`: `findCodex` (bundled `<app>/Contents/Resources/codex` first, then
-  `PATH`, `~/.local/bin`, mise shims, Homebrew), `rpcFetch` (stdio JSON-RPC, 15 s budget),
+- `lib/limits.mjs`: `findCodex` (bundled `<app>/Contents/Resources/codex-cli/bin/codex`
+  (26.924+), then the pre-26.924 `<app>/Contents/Resources/codex`, then `PATH`,
+  `~/.local/bin`, mise shims, Homebrew; the agent logs `limits source: …` on change), `rpcFetch` (stdio JSON-RPC, 15 s budget),
   `parseLimits` (pure, unit-tested), `nameForWindow`. Protocol:
   `rate-limits-protocol.md`.
 - Cadence: a 30 s tick; a poll when 5 minutes have passed, or immediately when a tick
@@ -121,7 +157,7 @@ fallback; theme changes need no JS.
 - Each successful read is pushed into every attached page with
   `__sprBarSetLimits(limits, meta)` — and right after every injection, so a reloaded
   window shows live numbers at once. A failed read is logged and pushed as `meta.error`:
-  the bar keeps the last good numbers marked `stale` (error in the tooltip), or shows
+  the bar keeps the last good numbers marked `stale` (error in the panel), or shows
   `limits unavailable` when no read has succeeded yet. The next good read clears it.
 - `rpcFetch` SIGTERMs the app-server after the answer and SIGKILLs it after a 2 s grace;
   a process `exit` handler kills any child still alive, so none outlives the agent.
@@ -145,6 +181,13 @@ Project the bar's state into a small JSON with `scripts/cdp-eval.mjs`:
 - Geometry: `elementFromPoint(x, barTop - 6)` hits app UI and `elementFromPoint(x,
   barTop + 12)` hits the bar at several x positions; covered-visible element count in the
   bar strip is 0.
-- `location.reload()` → log `reload: bar present`, live numbers return.
+- `location.reload()` → log `reload: bar present`, live numbers return, panel closed.
+- Panel: `__sprBarSetPanel(true)` → one `#spr-statusbar-panel`, `aria-expanded="true"`;
+  a synthetic `pointerdown` on `#root` and an Escape `keydown` both close it; the refresh
+  button logs `limits live (manual)` and a second click within 10 s logs `throttled`.
 - Screenshot (`--png` / `start.sh --capture`) in both themes — switch only via
-  `document.documentElement.dataset.theme` and restore the previous value.
+  `document.documentElement.dataset.theme` and restore the previous value. The window frame
+  is translucent over native glass, which CDP captures as gray: set
+  `Emulation.setDefaultBackgroundColorOverride` (and, for the bar strip, a temporary
+  `html` background) during the capture and clear both after. Never publish captures that
+  show the sidebar or chat content — blur `#root` (a temporary style) for panel shots.

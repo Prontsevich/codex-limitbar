@@ -7,8 +7,10 @@ desktop app itself talks to the same protocol (its bundled CLI is spawned as
 (`rpcFetch`, `parseLimits`, `nameForWindow`, `findCodex`), covered by
 `test/limits.test.mjs` — update both with any shape change.
 
-Verified against codex-cli 0.147.0; re-verified 0.154.0 and the bundled
-0.155.0-alpha.16.4 inside ChatGPT.app — same shape.
+Verified against codex-cli 0.147.0; re-verified 0.154.0, the bundled 0.155.0-alpha.16.4
+(ChatGPT 26.917) and the bundled 0.158.0-alpha.2.1 (ChatGPT 26.924) — same core shape;
+26.924 adds `ordinaryUsageAllowed`, `accountId`, `rateLimitUpsell`, `normalModelSlug` and
+populates the reset-credit list.
 
 ## The protocol
 
@@ -26,25 +28,40 @@ JSONL over stdio. Sequence:
 Live response shape (camelCase):
 
 ```json
-{"id":2,"result":{"rateLimits":{"limitId":"codex","limitName":null,
-  "primary":{"usedPercent":95,"windowDurationMins":10080,"resetsAt":1787203791},
-  "secondary":null,"credits":{"hasCredits":false,"unlimited":false,"balance":"0"},
+{"id":2,"result":{"ordinaryUsageAllowed":true,
+  "rateLimits":{"limitId":"codex","limitName":null,"normalModelSlug":null,
+  "primary":{"usedPercent":0,"windowDurationMins":300,"resetsAt":1790461457},
+  "secondary":{"usedPercent":0,"windowDurationMins":10080,"resetsAt":1791048257},
+  "credits":{"hasCredits":false,"unlimited":false,"balance":"0"},
   "individualLimit":null,"spendControlReached":false,"planType":"plus",
   "rateLimitReachedType":null},
   "rateLimitsByLimitId":{"codex":{...same...}},
-  "rateLimitResetCredits":{"availableCount":0,"credits":[]}}}
+  "rateLimitResetCredits":{"availableCount":3,"credits":[
+    {"id":"RateLimitResetCredit_…","resetType":"codexRateLimits","status":"available",
+     "grantedAt":1788485573,"expiresAt":1791077573,
+     "title":"Full reset (Weekly + 5 hr)","description":"…"}]},
+  "accountId":"…","rateLimitUpsell":{...}}}
 ```
 
 - `usedPercent` 0–100; `windowDurationMins` 300 = 5h, 10080 = weekly.
-- `resetsAt` is unix seconds.
-- `credits.resetCredits` (or `rateLimitResetCredits.availableCount`) = reset credits left.
-- `planType` = `plus` / `pro` / etc.
+- `resetsAt`, `grantedAt`, `expiresAt` are unix seconds.
+- `rateLimitResetCredits.availableCount` = reset credits left; `credits[]` lists them
+  (`status` `available` counts; others are ignored).
+- `planType` = `plus` / `pro` / etc. `rateLimitReachedType` names the window that is
+  exhausted (null otherwise); `spendControlReached` = the spend limit is hit;
+  `ordinaryUsageAllowed: false` = usage is blocked for the account.
+
+What `parseLimits` passes to the bar: per window `{name, usedPercent, resetsAtMs,
+windowDurationMins}`; meta `{live, planType, resetCredits, resetCreditsNextExpiresAtMs
+(earliest available credit), resetCreditTitle (its title, trimmed, ≤ 80 chars),
+limitReached, spendControlReached, usageAllowed, updatedAtMs}`. Deliberately **not**
+passed: credit ids and descriptions, `accountId`, `rateLimitUpsell`.
 
 ## Quick probe
 
 ```bash
 python3 scripts/probe_rate_limits.py [codex-executable]   # default: `codex` on PATH
-python3 scripts/probe_rate_limits.py /Applications/ChatGPT.app/Contents/Resources/codex
+python3 scripts/probe_rate_limits.py /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex
 ```
 
 Success = JSON printed with `rateLimits.primary` and `usedPercent`. Failure modes are
@@ -74,8 +91,11 @@ where the agent was started):
 
 `findCodex` in `lib/limits.mjs` takes the first executable candidate:
 
-1. The app's own bundled CLI: `<App.app>/Contents/Resources/codex` — same version the UI
-   talks to, no separate install required (`--app` / `CODEX_LIMITBAR_APP` select the app).
+1. The app's own bundled CLI — same version the UI talks to, no separate install
+   required (`--app` / `CODEX_LIMITBAR_APP` select the app):
+   `<App.app>/Contents/Resources/codex-cli/bin/codex` (26.924+), then the pre-26.924
+   location `<App.app>/Contents/Resources/codex`. The agent logs the chosen binary once
+   (`limits source: …`) — a PATH fallback there means the bundle layout changed again.
 2. `codex` in every `PATH` directory.
 3. `~/.local/bin/codex`, `~/.local/share/mise/shims/codex`, `/opt/homebrew/bin/codex`,
    `/usr/local/bin/codex`.

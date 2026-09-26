@@ -1,27 +1,34 @@
-// bar.js — the LIMITS status bar, injected into the ChatGPT desktop shell page
-// (app://-/index.html) over CDP. Evaluated both before the DOM exists
-// (Page.addScriptToEvaluateOnNewDocument) and into an already-loaded page
+// bar.js — the LIMITS status bar and its details panel, injected into the ChatGPT
+// desktop shell page (app://-/index.html) over CDP. Evaluated both before the DOM
+// exists (Page.addScriptToEvaluateOnNewDocument) and into an already-loaded page
 // (Runtime.evaluate); both paths converge on the same idempotent apply().
 //
 // Contract with the helper:
 //   - `BAR_VERSION` below is read by the helper with /BAR_VERSION = (\d+)/.
-//   - window.__sprBarSetLimits([{name, usedPercent, resetsAtMs}], meta)
-//       meta: {live, planType, resetCredits, updatedAtMs, error?}
+//   - window.__sprBarSetLimits([{name, usedPercent, resetsAtMs, windowDurationMins?}], meta)
+//       meta: {live, planType, resetCredits, resetCreditsNextExpiresAtMs?, resetCreditTitle?,
+//              limitReached?, spendControlReached?, usageAllowed?, updatedAtMs, error?}
 //   - window.__sprBarSetMode('used' | 'left')
-//   - window.__sprBarGetState() -> {version, mode, live, limits, meta, theme}
+//   - window.__sprBarSetPanel(open) — open/close the details panel
+//   - window.__sprBarGetState() -> {version, mode, live, limits, meta, theme, panelOpen}
 //   - window.__sprBarRemove() -> full teardown, restores the layout exactly
+//   - window.__sprBarRefreshBinding(payload) — CDP binding added by the helper (the
+//       panel's refresh button); absent for --once clients, then the button is hidden.
+//   - window.__sprBarRefreshDone() — the helper calls it when a manual refresh settles.
 //
-// Colors come only from the app's own CSS tokens, so the bar follows the
-// light/dark theme with no JS. The bar only appears once the app layout is
-// found: it reserves space (padding on the layout container) and never
-// overlays app UI.
+// Colors come only from the app's own CSS tokens, so bar and panel follow the
+// light/dark theme with no JS. The bar only appears once the app layout is found:
+// it reserves space (padding on the layout container) and never overlays app UI.
+// The details panel is the one exception: a transient, user-opened overlay.
 (() => {
-  const BAR_VERSION = 21;
+  const BAR_VERSION = 23;
   const ID = 'spr-statusbar';
+  const PANEL_ID = ID + '-panel';
   const STYLE_ID = ID + '-style';
   const LS_KEY = 'spr-statusbar-mode';
   const H = 28;
   const STALE_MS = 15 * 60 * 1000;
+  const REFRESH_TIMEOUT_MS = 20000;
 
   // Hot-swap: same version re-applies; any other version is torn down first.
   const prev = window.__sprBarInstance;
@@ -55,10 +62,29 @@
     if (m > 0) return m + 'm';
     return '<1m';
   };
+  const fmtAgo = ms => ms < 60000 ? 'just now' : fmtLeft(ms) + ' ago';
+  const hhmm = ms => { const d = new Date(ms); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  // "5-hour", "Weekly", "Daily", "3-day" from the window length; else the short name.
+  const titleFor = l => {
+    const m = Number(l.windowDurationMins) || 0;
+    if (m === 10080) return 'Weekly';
+    if (m === 1440) return 'Daily';
+    if (m > 1440 && m % 1440 === 0) return (m / 1440) + '-day';
+    if (m >= 60 && m % 60 === 0) return (m / 60) + '-hour';
+    return String(l.name || '?');
+  };
+  const hasData = () => Array.isArray(st.limits) && st.limits.length > 0;
+  const isStale = () => !st.live || !st.meta || !st.meta.updatedAtMs || Date.now() - st.meta.updatedAtMs > STALE_MS || !!st.meta.error;
+  const canRefresh = () => typeof window.__sprBarRefreshBinding === 'function';
 
+  const CHEVRON = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 6.5 5 3.5l3 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const REFRESH = '<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  const P = '#' + PANEL_ID;
   const CSS = [
-    '#' + ID + '{',
+    // Shared palette on both roots (the panel lives outside the bar).
+    '#' + ID + ',' + P + '{',
     '  --spr-fg: var(--app-color-text-foreground, var(--color-text-primary-surface, CanvasText));',
     '  --spr-fg2: var(--app-color-text-foreground-secondary, var(--spr-fg));',
     '  --spr-fg3: var(--app-color-text-foreground-tertiary, var(--spr-fg2));',
@@ -72,42 +98,95 @@
     '  --spr-low-fill: var(--app-color-accent-orange, var(--spr-low));',
     '  --spr-crit-fill: var(--app-color-accent-red, var(--spr-crit));',
     '  --spr-track: var(--switch-track-color, var(--app-color-border, rgba(128,128,128,.2)));',
-    '  position:fixed;bottom:0;left:0;right:0;height:' + H + 'px;z-index:25;',
-    '  display:flex;align-items:center;gap:12px;padding:0 12px;box-sizing:border-box;overflow:hidden;',
+    '  --spr-hover: var(--menu-item-background-color, rgba(128,128,128,.08));',
     '  font-family:var(--font-ui-family, var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif));',
-    '  font-size:12px;font-weight:500;line-height:' + H + 'px;color:var(--spr-fg2);',
-    '  font-variant-numeric:tabular-nums;user-select:none;-webkit-user-select:none;white-space:nowrap;',
-    '  background:transparent;',
+    '  box-sizing:border-box;',
     '}',
+    // Tabular digits only where numbers line up: Inter's tnum also widens the hyphen.
+    '#' + ID + ',' + P + ' .spr-row,' + P + ' .spr-sub{font-variant-numeric:tabular-nums}',
+    '#' + ID + ' .spr-ok,' + P + ' .spr-ok{color:var(--spr-ok)}',
+    '#' + ID + ' .spr-mid,' + P + ' .spr-mid{color:var(--spr-mid)}',
+    '#' + ID + ' .spr-low,' + P + ' .spr-low{color:var(--spr-low)}',
+    '#' + ID + ' .spr-crit,' + P + ' .spr-crit{color:var(--spr-crit)}',
+    '#' + ID + ' .spr-fill,' + P + ' .spr-fill{display:block;height:100%;border-radius:999px;transition:width .25s ease}',
+    '#' + ID + ' .spr-ok .spr-fill,' + P + ' .spr-ok .spr-fill{background:var(--spr-ok-fill)}',
+    '#' + ID + ' .spr-mid .spr-fill,' + P + ' .spr-mid .spr-fill{background:var(--spr-mid-fill)}',
+    '#' + ID + ' .spr-low .spr-fill,' + P + ' .spr-low .spr-fill{background:var(--spr-low-fill)}',
+    '#' + ID + ' .spr-crit .spr-fill,' + P + ' .spr-crit .spr-fill{background:var(--spr-crit-fill)}',
+    '#' + ID + ' .spr-dot,' + P + ' .spr-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--spr-ok-fill);flex:none}',
+    '#' + ID + ' .spr-dot.spr-stale,' + P + ' .spr-dot.spr-stale{background:var(--spr-low-fill)}',
+    '#' + ID + ' .spr-dot.spr-none,' + P + ' .spr-dot.spr-none{background:var(--spr-fg3)}',
+
+    // ---- the bar (a button that opens the panel) ----
+    '#' + ID + '{',
+    '  position:fixed;bottom:0;left:0;right:0;height:' + H + 'px;z-index:25;',
+    '  display:flex;align-items:center;gap:12px;padding:0 12px;overflow:hidden;',
+    '  font-size:12px;font-weight:500;line-height:' + H + 'px;color:var(--spr-fg2);',
+    '  user-select:none;-webkit-user-select:none;white-space:nowrap;cursor:pointer;',
+    '  background:transparent;border-radius:var(--radius-md, 10px);outline:none;',
+    '  transition:background-color .12s ease;',
+    '}',
+    '#' + ID + ':hover,#' + ID + '[aria-expanded="true"]{background:var(--spr-hover)}',
+    '#' + ID + ':focus-visible{box-shadow:inset 0 0 0 1px var(--spr-fg3)}',
     // Fallback shape (no inset card found): a plain strip on the app surface.
-    '#' + ID + '.spr-flat{background:var(--app-color-background-surface-under, var(--color-surface-secondary, Canvas));border-top:1px solid var(--app-color-border, rgba(128,128,128,.2));}',
+    '#' + ID + '.spr-flat{background:var(--app-color-background-surface-under, var(--color-surface-secondary, Canvas));border-top:1px solid var(--app-color-border, rgba(128,128,128,.2));border-radius:0}',
+    '#' + ID + '.spr-flat:hover,#' + ID + '.spr-flat[aria-expanded="true"]{background:var(--spr-hover)}',
     '#' + ID + ' .spr-label{color:var(--spr-fg3);font-size:var(--font-small-caps-md-size, 11px);font-weight:var(--font-small-caps-md-weight, 600);letter-spacing:var(--font-small-caps-md-tracking, .65px);text-transform:uppercase}',
     '#' + ID + ' .spr-block{display:inline-flex;align-items:center;gap:8px;min-width:0}',
     '#' + ID + ' .spr-name{color:var(--spr-fg2)}',
     '#' + ID + ' .spr-track{display:inline-block;width:64px;height:4px;border-radius:999px;background:var(--spr-track);overflow:hidden;flex:none}',
-    '#' + ID + ' .spr-fill{display:block;height:100%;border-radius:999px;transition:width .25s ease}',
-    '#' + ID + ' .spr-ok .spr-fill{background:var(--spr-ok-fill)}',
-    '#' + ID + ' .spr-mid .spr-fill{background:var(--spr-mid-fill)}',
-    '#' + ID + ' .spr-low .spr-fill{background:var(--spr-low-fill)}',
-    '#' + ID + ' .spr-crit .spr-fill{background:var(--spr-crit-fill)}',
     '#' + ID + ' .spr-val{display:inline-flex;align-items:baseline;gap:4px}',
     '#' + ID + ' .spr-val b{font-weight:600}',
     '#' + ID + ' .spr-val span,#' + ID + ' .spr-reset{color:var(--spr-fg3)}',
-    '#' + ID + ' .spr-ok{color:var(--spr-ok)}',
-    '#' + ID + ' .spr-mid{color:var(--spr-mid)}',
-    '#' + ID + ' .spr-low{color:var(--spr-low)}',
-    '#' + ID + ' .spr-crit{color:var(--spr-crit)}',
     '#' + ID + ' .spr-sep{width:1px;height:12px;background:var(--spr-fg3);flex:none}',
     '#' + ID + ' .spr-spacer{margin-left:auto}',
-    // used/left toggle mirrors the app's own mode toggle (Chat / Work) tokens.
-    '#' + ID + ' .spr-toggle{display:inline-flex;padding:2px;gap:2px;border-radius:999px;background:var(--color-background-mode-toggle-track, var(--spr-track));flex:none}',
-    '#' + ID + ' .spr-toggle button{all:unset;cursor:pointer;font-size:11px;line-height:18px;height:18px;padding:0 9px;border-radius:999px;color:var(--color-text-mode-toggle-inactive, var(--spr-fg3));box-sizing:border-box}',
-    '#' + ID + ' .spr-toggle button.on{background:var(--color-background-mode-toggle-selected, var(--app-color-background-control, transparent));color:var(--color-text-mode-toggle-primary, var(--spr-fg));box-shadow:0 0 0 .5px var(--color-border-mode-toggle-selected, transparent)}',
-    '#' + ID + ' .spr-note{color:var(--spr-fg3);font-size:11px}',
-    '#' + ID + ' .spr-note.spr-stale{color:var(--spr-low)}',
     '#' + ID + ' .spr-wait{color:var(--spr-fg3)}',
-    '@media (max-width:900px){#' + ID + ' .spr-note{display:none}}',
-    '@media (max-width:720px){#' + ID + ' .spr-reset,#' + ID + ' .spr-label{display:none}}'
+    '#' + ID + ' .spr-end{display:inline-flex;align-items:center;gap:8px;color:var(--spr-fg3);flex:none}',
+    '#' + ID + ' .spr-end svg{transition:transform .15s ease}',
+    '#' + ID + '[aria-expanded="true"] .spr-end svg{transform:rotate(180deg)}',
+    '@media (max-width:720px){#' + ID + ' .spr-reset,#' + ID + ' .spr-label{display:none}}',
+
+    // ---- the details panel (menu tokens: same surface, shadow and radius as app menus) ----
+    P + '{',
+    '  position:fixed;z-index:29;width:min(320px, calc(100vw - 24px));overflow:auto;',
+    '  padding:6px 0;color:var(--spr-fg);font-size:var(--menu-font-size, 13px);line-height:1.35;',
+    '  background:var(--menu-background-color, var(--app-color-background-elevated-primary-opaque, Canvas));',
+    '  border-radius:var(--popover-radius, 15px);',
+    '  box-shadow:var(--menu-box-shadow, 0 0 0 .5px rgba(128,128,128,.2), 0 8px 16px -4px rgba(0,0,0,.3));',
+    '  user-select:none;-webkit-user-select:none;cursor:default;',
+    '  animation:spr-pop .12s ease-out;',
+    '}',
+    '@keyframes spr-pop{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}',
+    '@keyframes spr-spin{to{transform:rotate(360deg)}}',
+    P + ' .spr-sec{padding:8px 14px}',
+    P + ' .spr-hr{height:1px;margin:4px 14px;background:var(--menu-separator-background-color, var(--app-color-border, rgba(128,128,128,.2)))}',
+    P + ' .spr-head{display:flex;align-items:center;gap:8px}',
+    P + ' .spr-title{font-weight:600;color:var(--spr-fg)}',
+    P + ' .spr-badge{font-size:11px;font-weight:500;line-height:18px;padding:0 7px;border-radius:999px;color:var(--spr-fg2);background:var(--spr-hover);text-transform:capitalize}',
+    P + ' .spr-sub{display:flex;align-items:center;gap:6px;margin-top:2px;font-size:12px;color:var(--spr-fg3)}',
+    P + ' .spr-icon{all:unset;box-sizing:border-box;margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:var(--radius-md, 10px);color:var(--spr-fg2);cursor:pointer}',
+    P + ' .spr-icon:hover{background:var(--spr-hover);color:var(--spr-fg)}',
+    P + ' .spr-icon:focus-visible{box-shadow:inset 0 0 0 1px var(--spr-fg3)}',
+    P + ' .spr-icon[aria-busy="true"] svg{animation:spr-spin .8s linear infinite}',
+    P + ' .spr-icon[aria-busy="true"]{cursor:progress}',
+    P + ' .spr-lim + .spr-lim{margin-top:12px}',
+    P + ' .spr-lname{font-weight:500;color:var(--spr-fg)}',
+    P + ' .spr-bar{height:6px;margin:7px 0 6px;border-radius:999px;background:var(--spr-track);overflow:hidden}',
+    P + ' .spr-row{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--spr-fg3)}',
+    P + ' .spr-row b{font-weight:600}',
+    P + ' .spr-muted{font-size:12px;color:var(--spr-fg3)}',
+    P + ' .spr-strong{color:var(--spr-fg)}',
+    P + ' .spr-warn{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--spr-low)}',
+    P + ' .spr-warn + .spr-warn{margin-top:4px}',
+    P + ' .spr-warn.spr-crit{color:var(--spr-crit)}',
+    P + ' .spr-foot{display:flex;align-items:center;justify-content:space-between;gap:12px}',
+    // used/left toggle mirrors the app's own mode toggle (Chat / Work) tokens.
+    P + ' .spr-toggle{display:inline-flex;padding:2px;gap:2px;border-radius:999px;background:var(--color-background-mode-toggle-track, var(--spr-track));flex:none}',
+    P + ' .spr-toggle button{all:unset;cursor:pointer;font-size:12px;line-height:20px;height:20px;padding:0 10px;border-radius:999px;color:var(--color-text-mode-toggle-inactive, var(--spr-fg3));box-sizing:border-box}',
+    P + ' .spr-toggle button.on{background:var(--color-background-mode-toggle-selected, var(--app-color-background-control, transparent));color:var(--color-text-mode-toggle-primary, var(--spr-fg));box-shadow:0 0 0 .5px var(--color-border-mode-toggle-selected, transparent)}',
+    P + ' .spr-toggle button:focus-visible{box-shadow:inset 0 0 0 1px var(--spr-fg3)}',
+    P + ' .spr-source{margin-top:8px;font-size:11px;color:var(--spr-fg3)}',
+    '@media (prefers-reduced-motion:reduce){' + P + '{animation:none}' + P + ' .spr-icon[aria-busy="true"] svg{animation:none}#' + ID + ' .spr-end svg{transition:none}}'
   ].join('\n');
 
   // ---- layout discovery ---------------------------------------------------------------
@@ -140,8 +219,13 @@
   };
 
   let lastHtml = '';
+  let lastPanelHtml = '';
   let layouts = [];
   let card = null;
+  let panelOpen = false;
+  let refreshing = false;
+  let refreshTimer = 0;
+  let panelTick = 0;
 
   const ensureStyle = () => {
     let s = document.getElementById(STYLE_ID);
@@ -153,75 +237,253 @@
     if (s.textContent !== CSS) s.textContent = CSS;
   };
 
-  const onClick = ev => {
-    const t = ev.target && ev.target.closest ? ev.target.closest('[data-spr-mode]') : null;
-    if (!t) return;
-    st.mode = t.getAttribute('data-spr-mode') === 'left' ? 'left' : 'used';
-    writeMode(st.mode);
-    render();
+  // ---- panel open/close ---------------------------------------------------------------
+  const onBarClick = () => setPanel(!panelOpen);
+  const onBarKey = ev => {
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setPanel(!panelOpen); }
+  };
+  // Outside pointerdown closes; the bar itself toggles through its own click.
+  const onDocPointer = ev => {
+    const t = ev.target;
+    const bar = document.getElementById(ID), panel = document.getElementById(PANEL_ID);
+    if ((panel && panel.contains(t)) || (bar && bar.contains(t))) return;
+    setPanel(false);
+  };
+  const onDocKey = ev => {
+    if (ev.key !== 'Escape') return;
+    ev.stopPropagation();
+    setPanel(false);
+    const bar = document.getElementById(ID); if (bar) bar.focus();
+  };
+  const onBlur = () => setPanel(false);
+
+  const onPanelClick = ev => {
+    const el = ev.target && ev.target.closest ? ev.target : null;
+    if (!el) return;
+    const mode = el.closest('[data-spr-mode]');
+    if (mode) {
+      st.mode = mode.getAttribute('data-spr-mode') === 'left' ? 'left' : 'used';
+      writeMode(st.mode);
+      render();
+      return;
+    }
+    if (el.closest('[data-spr-refresh]')) requestRefresh();
   };
 
+  const requestRefresh = () => {
+    if (refreshing || !canRefresh()) return;
+    refreshing = true;
+    clearTimeout(refreshTimer);
+    // The helper answers through __sprBarRefreshDone / __sprBarSetLimits; a stale
+    // binding (agent gone) must not leave the spinner running forever.
+    refreshTimer = setTimeout(() => { refreshing = false; renderPanel(); }, REFRESH_TIMEOUT_MS);
+    renderPanel();
+    try { window.__sprBarRefreshBinding('refresh'); } catch (err) { refreshing = false; renderPanel(); }
+  };
+  const refreshDone = () => {
+    if (!refreshing) return;
+    refreshing = false;
+    clearTimeout(refreshTimer);
+    renderPanel();
+  };
+
+  function setPanel(open) {
+    open = !!open && !!document.getElementById(ID);
+    if (open === panelOpen) return;
+    panelOpen = open;
+    const bar = document.getElementById(ID);
+    if (bar) bar.setAttribute('aria-expanded', String(open));
+    if (open) {
+      document.addEventListener('pointerdown', onDocPointer, true);
+      document.addEventListener('keydown', onDocKey, true);
+      addEventListener('blur', onBlur);
+      panelTick = setInterval(() => { render(); }, 10000);
+      renderPanel();
+    } else {
+      document.removeEventListener('pointerdown', onDocPointer, true);
+      document.removeEventListener('keydown', onDocKey, true);
+      removeEventListener('blur', onBlur);
+      clearInterval(panelTick); panelTick = 0;
+      const p = document.getElementById(PANEL_ID); if (p) p.remove();
+      lastPanelHtml = '';
+    }
+  }
+
+  const ensurePanel = () => {
+    let p = document.getElementById(PANEL_ID);
+    if (!p) {
+      p = document.createElement('div');
+      p.id = PANEL_ID;
+      p.setAttribute('role', 'dialog');
+      p.setAttribute('aria-label', 'Codex usage limits');
+      p.addEventListener('click', onPanelClick);
+      (document.body || document.documentElement).appendChild(p);
+      lastPanelHtml = '';
+    }
+    return p;
+  };
+
+  // Above the bar, left-aligned with it, clamped into the viewport.
+  const placePanel = () => {
+    const p = document.getElementById(PANEL_ID), bar = document.getElementById(ID);
+    if (!p || !bar) return;
+    const r = bar.getBoundingClientRect();
+    const w = p.offsetWidth || 320;
+    const left = clamp(Math.round(r.left), 12, Math.max(12, innerWidth - w - 12)) + 'px';
+    const bottom = Math.round(innerHeight - r.top + 6) + 'px';
+    const maxH = Math.max(160, Math.round(r.top - 18)) + 'px';
+    if (p.style.left !== left) p.style.left = left;
+    if (p.style.bottom !== bottom) p.style.bottom = bottom;
+    if (p.style.maxHeight !== maxH) p.style.maxHeight = maxH;
+  };
+
+  // ---- rendering ----------------------------------------------------------------------
   const ensureBar = () => {
     let d = document.getElementById(ID);
     if (d && d.dataset.sprVersion !== String(BAR_VERSION)) { d.remove(); d = null; lastHtml = ''; }
     if (!d) {
       d = document.createElement('div');
       d.id = ID;
-      d.setAttribute('role', 'status');
+      d.setAttribute('role', 'button');
+      d.setAttribute('tabindex', '0');
+      d.setAttribute('aria-haspopup', 'dialog');
+      d.setAttribute('aria-controls', PANEL_ID);
+      d.setAttribute('aria-expanded', String(panelOpen));
+      d.setAttribute('aria-label', 'Codex usage limits — show details');
       d.dataset.sprVersion = String(BAR_VERSION);
-      d.addEventListener('click', onClick);
+      d.addEventListener('click', onBarClick);
+      d.addEventListener('keydown', onBarKey);
       (document.body || document.documentElement).appendChild(d);
       lastHtml = '';
     }
     return d;
   };
 
-  const blockHTML = l => {
+  const usage = l => {
     const used = clamp(Number(l.usedPercent) || 0, 0, 100);
     const remaining = 100 - used;
-    const lvl = levelFor(remaining);
-    const shown = Math.round(st.mode === 'left' ? remaining : used);
-    const fillW = st.mode === 'left' ? remaining : used;
-    const left = l.resetsAtMs ? fmtLeft(l.resetsAtMs - Date.now()) : '—';
-    const title = l.resetsAtMs ? ('resets in ' + left + ' · ' + new Date(l.resetsAtMs).toLocaleString()) : 'reset time not reported';
+    return {
+      lvl: levelFor(remaining),
+      shown: Math.round(st.mode === 'left' ? remaining : used),
+      fill: st.mode === 'left' ? remaining : used,
+      word: st.mode === 'left' ? 'left' : 'used',
+      left: l.resetsAtMs ? fmtLeft(l.resetsAtMs - Date.now()) : null,
+      exact: l.resetsAtMs ? new Date(l.resetsAtMs).toLocaleString() : 'reset time not reported'
+    };
+  };
+
+  const blockHTML = l => {
+    const u = usage(l);
     // Layout: [name] [mini bar] [NN% used] [time-to-reset]
     return '<span class="spr-block">'
       + '<span class="spr-name">' + esc(l.name) + '</span>'
-      + '<span class="spr-track spr-' + lvl + '"><span class="spr-fill" style="width:' + fillW + '%"></span></span>'
-      + '<span class="spr-val"><b class="spr-' + lvl + '">' + shown + '%</b><span>' + (st.mode === 'left' ? 'left' : 'used') + '</span></span>'
-      + '<span class="spr-reset" title="' + esc(title) + '">' + left + '</span>'
+      + '<span class="spr-track spr-' + u.lvl + '"><span class="spr-fill" style="width:' + u.fill + '%"></span></span>'
+      + '<span class="spr-val"><b class="spr-' + u.lvl + '">' + u.shown + '%</b><span>' + u.word + '</span></span>'
+      + '<span class="spr-reset">' + (u.left || '—') + '</span>'
       + '</span>';
   };
 
-  const render = () => {
+  const statusDot = () => {
+    if (!hasData()) return '<span class="spr-dot spr-none"></span>';
+    return '<span class="spr-dot' + (isStale() ? ' spr-stale' : '') + '"></span>';
+  };
+
+  const renderBar = () => {
     const bar = document.getElementById(ID);
     if (!bar) return;
     let html = '<span class="spr-label">Limits</span>';
-    const limits = Array.isArray(st.limits) ? st.limits : null;
-    if (limits && limits.length) {
-      limits.forEach((l, i) => { if (i > 0) html += '<span class="spr-sep"></span>'; html += blockHTML(l); });
-      html += '<span class="spr-toggle spr-spacer">'
-        + '<button data-spr-mode="used" class="' + (st.mode === 'used' ? 'on' : '') + '">used</button>'
-        + '<button data-spr-mode="left" class="' + (st.mode === 'left' ? 'on' : '') + '">left</button>'
-        + '</span>';
+    if (hasData()) {
+      st.limits.forEach((l, i) => { if (i > 0) html += '<span class="spr-sep"></span>'; html += blockHTML(l); });
     } else {
-      const err = st.meta && st.meta.error;
-      html += '<span class="spr-wait"' + (err ? ' title="' + esc(err) + '"' : '') + '>'
-        + (err ? 'limits unavailable' : 'waiting for data…') + '</span><span class="spr-spacer"></span>';
+      html += '<span class="spr-wait">' + (st.meta && st.meta.error ? 'limits unavailable' : 'waiting for data…') + '</span>';
     }
-    if (st.meta && st.meta.updatedAtMs && limits && limits.length) {
-      const d = new Date(st.meta.updatedAtMs);
-      const hh = String(d.getHours()).padStart(2, '0'), mm = String(d.getMinutes()).padStart(2, '0');
-      const stale = !st.live || Date.now() - st.meta.updatedAtMs > STALE_MS || !!st.meta.error;
-      const title = 'plan ' + (st.meta.planType || '?')
-        + (st.meta.resetCredits != null ? ' · ' + st.meta.resetCredits + ' reset credits' : '')
-        + ' · source: local codex app-server'
-        + (st.meta.error ? ' · last refresh failed: ' + st.meta.error : '');
-      html += '<span class="spr-note' + (stale ? ' spr-stale' : '') + '" title="' + esc(title) + '">'
-        + (stale ? 'stale' : 'live') + ' &middot; updated ' + hh + ':' + mm + '</span>';
-    }
+    html += '<span class="spr-end spr-spacer">' + statusDot() + CHEVRON + '</span>';
     if (html !== lastHtml) { bar.innerHTML = html; lastHtml = html; }
+    const tip = !hasData() ? 'Codex usage limits'
+      : (isStale() ? 'stale' : 'live') + ' · updated ' + hhmm(st.meta.updatedAtMs) + ' — click for details';
+    if (bar.title !== tip) bar.title = tip;
   };
+
+  const panelHTML = () => {
+    const m = st.meta || {};
+    const data = hasData();
+    let h = '<div class="spr-sec"><div class="spr-head"><span class="spr-title">Codex</span>';
+    if (m.planType) h += '<span class="spr-badge">' + esc(m.planType) + '</span>';
+    if (canRefresh()) {
+      h += '<button class="spr-icon" type="button" data-spr-refresh aria-label="Refresh limits" title="Refresh now"'
+        + (refreshing ? ' aria-busy="true"' : '') + '>' + REFRESH + '</button>';
+    }
+    h += '</div><div class="spr-sub">';
+    if (m.updatedAtMs) {
+      h += statusDot() + '<span title="' + esc(new Date(m.updatedAtMs).toLocaleString()) + '">'
+        + (isStale() ? 'Stale · updated ' : 'Updated ') + fmtAgo(Date.now() - m.updatedAtMs) + '</span>';
+    } else {
+      h += statusDot() + '<span>' + (m.error ? 'Limits unavailable' : 'Waiting for the first read…') + '</span>';
+    }
+    h += '</div></div>';
+
+    if (data) {
+      h += '<div class="spr-hr"></div><div class="spr-sec">';
+      for (const l of st.limits) {
+        const u = usage(l);
+        h += '<div class="spr-lim"><div class="spr-lname">' + esc(titleFor(l)) + '</div>'
+          + '<div class="spr-bar spr-' + u.lvl + '"><span class="spr-fill" style="width:' + u.fill + '%"></span></div>'
+          + '<div class="spr-row"><span><b class="spr-' + u.lvl + '">' + u.shown + '%</b> ' + u.word + '</span>'
+          + '<span title="' + esc(u.exact) + '">' + (u.left ? 'Resets in ' + u.left : 'Reset time not reported') + '</span></div></div>';
+      }
+      h += '</div>';
+    }
+
+    if (m.resetCredits > 0) {
+      h += '<div class="spr-hr"></div><div class="spr-sec">'
+        + '<div class="spr-strong">' + m.resetCredits + ' rate-limit reset' + (m.resetCredits === 1 ? '' : 's') + ' available</div>';
+      if (m.resetCreditsNextExpiresAtMs) {
+        h += '<div class="spr-muted" title="' + esc(new Date(m.resetCreditsNextExpiresAtMs).toLocaleString()) + '">Next expires in '
+          + fmtLeft(m.resetCreditsNextExpiresAtMs - Date.now()) + '</div>';
+      }
+      if (m.resetCreditTitle) h += '<div class="spr-muted">' + esc(m.resetCreditTitle) + '</div>';
+      h += '</div>';
+    }
+
+    const warns = [];
+    if (m.limitReached) warns.push(['crit', 'Rate limit reached (' + m.limitReached + ')']);
+    if (m.spendControlReached) warns.push(['crit', 'Spend limit reached']);
+    if (m.usageAllowed === false) warns.push(['crit', 'Usage is currently not allowed for this account']);
+    if (m.error) warns.push(['low', (data ? 'Last refresh failed: ' : '') + m.error]);
+    if (warns.length) {
+      h += '<div class="spr-hr"></div><div class="spr-sec">'
+        + warns.map(([lvl, text]) => '<div class="spr-warn' + (lvl === 'crit' ? ' spr-crit' : '') + '">' + esc(text) + '</div>').join('')
+        + '</div>';
+    }
+
+    h += '<div class="spr-hr"></div><div class="spr-sec"><div class="spr-foot"><span class="spr-muted">Show</span>'
+      + '<span class="spr-toggle" role="group" aria-label="Show used or left">'
+      + '<button type="button" data-spr-mode="used" class="' + (st.mode === 'used' ? 'on' : '') + '" aria-pressed="' + (st.mode === 'used') + '">used</button>'
+      + '<button type="button" data-spr-mode="left" class="' + (st.mode === 'left' ? 'on' : '') + '" aria-pressed="' + (st.mode === 'left') + '">left</button>'
+      + '</span></div>'
+      + '<div class="spr-source">Local app-server · refreshes every 5 min</div></div>';
+    return h;
+  };
+
+  function renderPanel() {
+    if (!panelOpen) return;
+    const p = ensurePanel();
+    const html = panelHTML();
+    if (html !== lastPanelHtml) {
+      // Keep keyboard focus on the same control across a re-render.
+      const a = document.activeElement;
+      const key = a && p.contains(a) ? (a.getAttribute('data-spr-mode') || (a.hasAttribute('data-spr-refresh') ? 'refresh' : null)) : null;
+      p.innerHTML = html;
+      lastPanelHtml = html;
+      if (key) {
+        const again = key === 'refresh' ? p.querySelector('[data-spr-refresh]') : p.querySelector('[data-spr-mode="' + key + '"]');
+        if (again) again.focus();
+      }
+    }
+    placePanel();
+  }
+
+  const render = () => { renderBar(); renderPanel(); };
 
   const restorePad = el => {
     el.style.paddingBottom = el.dataset.sprOrigPad || '';
@@ -270,6 +532,7 @@
     const found = findLayouts();
     if (!found.length) {
       // No app layout yet (boot, or a route without it): never float over unknown UI.
+      setPanel(false);
       const b = document.getElementById(ID); if (b) { b.remove(); lastHtml = ''; }
       for (const el of document.querySelectorAll('[data-spr-padded]')) restorePad(el);
       layouts = []; card = null;
@@ -297,6 +560,7 @@
     const found = findLayouts();
     if (!found.length) return !!bar || document.querySelectorAll('[data-spr-padded]').length > 0;
     if (!bar || bar.dataset.sprVersion !== String(BAR_VERSION)) return true;
+    if (panelOpen && !document.getElementById(PANEL_ID)) return true;
     if (found.some(el => el.style.paddingBottom !== H + 'px')) return true;
     if (found.length !== layouts.length || found.some((el, i) => el !== layouts[i])) return true;
     return findCard(found[0]) !== card;
@@ -320,19 +584,23 @@
   }
 
   const remove = () => {
+    setPanel(false);
     started = false;
     clearInterval(tick);
     clearTimeout(debounce);
+    clearTimeout(refreshTimer);
+    refreshing = false;
     removeEventListener('resize', onResize);
     document.removeEventListener('DOMContentLoaded', onReady);
     if (mo) { mo.disconnect(); mo = null; }
     if (ro) { ro.disconnect(); ro = null; }
     const b = document.getElementById(ID); if (b) b.remove();
+    const p = document.getElementById(PANEL_ID); if (p) p.remove();
     const s = document.getElementById(STYLE_ID); if (s) s.remove();
     for (const el of document.querySelectorAll('[data-spr-padded]')) restorePad(el);
-    layouts = []; card = null; lastHtml = '';
+    layouts = []; card = null; lastHtml = ''; lastPanelHtml = '';
     if (window.__sprBarInstance === instance) delete window.__sprBarInstance;
-    for (const k of ['__sprBarSetLimits', '__sprBarSetMode', '__sprBarGetState', '__sprBarRemove']) {
+    for (const k of ['__sprBarSetLimits', '__sprBarSetMode', '__sprBarSetPanel', '__sprBarGetState', '__sprBarRemove', '__sprBarRefreshDone']) {
       try { delete window[k]; } catch (err) {}
     }
   };
@@ -345,17 +613,21 @@
       st.limits = (arr || []).map(l => ({
         name: String(l.name || l.id || '?'),
         usedPercent: Number(l.usedPercent != null ? l.usedPercent : l.used) || 0,
-        resetsAtMs: Number(l.resetsAtMs || l.resetsAt) || null
+        resetsAtMs: Number(l.resetsAtMs || l.resetsAt) || null,
+        windowDurationMins: Number(l.windowDurationMins) || null
       }));
       if (meta) { st.live = !!meta.live; st.meta = meta; }
+      refreshDone();
       render();
       return true;
     } catch (err) { return false; }
   };
   window.__sprBarSetMode = m => { st.mode = m === 'left' ? 'left' : 'used'; writeMode(st.mode); render(); };
+  window.__sprBarSetPanel = open => { setPanel(open); return panelOpen; };
+  window.__sprBarRefreshDone = refreshDone;
   window.__sprBarGetState = () => ({
     version: BAR_VERSION, mode: st.mode, live: st.live, meta: st.meta, limits: st.limits,
-    theme: document.documentElement.dataset.theme || null
+    theme: document.documentElement.dataset.theme || null, panelOpen
   });
   window.__sprBarRemove = remove;
 

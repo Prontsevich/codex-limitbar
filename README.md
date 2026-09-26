@@ -1,14 +1,17 @@
 # codex-limitbar
 
 A rate-limit status bar for the **ChatGPT desktop app** (macOS). It shows your Codex usage
-windows — percent used, time to reset, plan and reset credits — in a slim strip at the
-bottom of the app window, following the app's light/dark theme.
+windows — percent used and time to reset — in a slim strip at the bottom of the app
+window; click it for a details panel with plan, reset credits and refresh. Both follow the
+app's light/dark theme.
 
 ![codex-limitbar status bar](docs/screenshot.png)
 
 ```
-LIMITS  5h  ▁▁▁▁▁▁  0% used  3h 45m  |  Weekly  ███▄▄▄  73% used  19h 48m     used|left   live · updated 02:11
+LIMITS  5h  ▁▁▁▁▁▁  0% used  3h 45m  |  Weekly  ███▄▄▄  73% used  19h 48m                 ● ⌃
 ```
+
+<img src="docs/panel.png" alt="codex-limitbar details panel" width="352">
 
 Nothing inside `/Applications/ChatGPT.app` is modified: the bar is injected at runtime into
 the app's local UI over the Chrome DevTools Protocol (CDP).
@@ -118,12 +121,22 @@ final status line; when the bar is already active it only brings the window forw
 - Per limit: `[name] [mini bar] [NN% used] [time to reset]`; hover the time for the exact
   reset moment. Color by the amount **remaining**: ≥ 50 green, ≥ 25 yellow, ≥ 10 orange,
   < 10 red.
-- `used` / `left` toggle on the right (choice persisted).
-- Note on the far right: `live · updated HH:MM` (hover: plan and reset credits); it turns
-  to `stale` when the data is older than 15 minutes. Before the first read the bar says
-  `waiting for data…`.
+- A status dot on the far right: green = live, orange = stale (data older than 15 minutes
+  or the last read failed). Before the first read the bar says `waiting for data…`.
 - One limit row is normal — the 5-hour window is suspended for many accounts.
-- On narrow windows the note, then the label and reset times, are hidden.
+- On narrow windows the label and reset times are hidden.
+
+**Details panel** — click the bar (or focus it and press Enter/Space). It opens above the
+bar in the app's own menu style and closes on a click outside, Escape, or a second click:
+
+- Header: `Codex`, plan badge, `Updated 3m ago` with the live/stale dot, and a refresh
+  button that asks the agent for an immediate read (throttled to one read per 10 s).
+- Per limit: a full-width bar, `NN% used|left` and `Resets in 2h 13m` (hover: exact time).
+- Reset credits: how many are available, when the next one expires, and its title.
+  (Using a credit stays in ChatGPT itself — the panel only shows them.)
+- Warnings when a limit or the spend limit is reached, usage is not allowed, or the last
+  read failed (with the error).
+- `Show used | left` toggle (persisted; applies to the bar too).
 
 ## Uninstall
 
@@ -160,9 +173,9 @@ Common cases:
 - **`no app://-/index.html page target`** — the main window is not open yet or was closed;
   open it and re-run `start.sh`.
 - **`Node.js >= 22 not found`** — install Node 22+, or point `CODEX_LIMITBAR_NODE` at it.
-- **Bar says `limits unavailable` or `stale`** — the limits read fails (hover for the error). Check the log for
+- **Bar says `limits unavailable` or `stale`** — the limits read fails (open the panel for the error). Check the log for
   `limits ERR`, then probe the CLI directly:
-  `python3 skills/codex-limitbar/scripts/probe_rate_limits.py /Applications/ChatGPT.app/Contents/Resources/codex`.
+  `python3 skills/codex-limitbar/scripts/probe_rate_limits.py /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`.
   If the probe fails too, run `codex login` (or sign in inside the app) and retry.
 - **Bar gone after a ChatGPT update** — Sparkle relaunches the app without the port; run
   `codex-limitbar` again. If it still fails, the update may have closed the method — see
@@ -178,9 +191,10 @@ Evaluate in the shell page, e.g.
 
 | Hook | Purpose |
 |------|---------|
-| `__sprBarSetLimits([{name, usedPercent, resetsAtMs}], meta)` | push limits + `{live, planType, resetCredits, updatedAtMs, error?}` |
+| `__sprBarSetLimits([{name, usedPercent, resetsAtMs, windowDurationMins?}], meta)` | push limits + `{live, planType, resetCredits, resetCreditsNextExpiresAtMs, resetCreditTitle, limitReached, spendControlReached, usageAllowed, updatedAtMs, error?}` |
 | `__sprBarSetMode('used' \| 'left')` | switch display mode |
-| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme}` |
+| `__sprBarSetPanel(true \| false)` | open / close the details panel |
+| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen}` |
 | `__sprBarRemove()` | full teardown, restores the layout exactly |
 
 ## Development

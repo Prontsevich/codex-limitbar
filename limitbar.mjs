@@ -31,6 +31,8 @@ const POLL_MS = 5 * 60 * 1000;
 const TICK_MS = 30 * 1000;
 const WAKE_GAP_MS = 90 * 1000;       // a tick that arrives this late means the Mac slept
 const RECONNECT_MS = 30 * 1000;      // how long to wait for the app to come back on the same port
+const MANUAL_MIN_MS = 10 * 1000;     // manual refreshes closer than this reuse the last read
+const BINDING = '__sprBarRefreshBinding';   // page -> agent channel for the panel's refresh button
 
 function parseArgs(argv) {
   const o = { app: DEFAULT_APP, bar: path.join(HERE, 'bar.js'), once: false };
@@ -83,6 +85,7 @@ function readBar() {
 
 const HAS_BAR = "typeof window.__sprBarSetLimits === 'function'";
 const REMOVE_BAR = 'window.__sprBarRemove && window.__sprBarRemove()';
+const REFRESH_DONE = 'window.__sprBarRefreshDone && window.__sprBarRefreshDone()';
 
 class Agent {
   constructor(bar) {
@@ -96,6 +99,7 @@ class Agent {
     this.lastPollAt = 0;
     this.stopping = false;
     this.stateWritten = false;
+    this.codexBin = null;
   }
 
   limitsJs() {
@@ -117,6 +121,7 @@ class Agent {
       for (const [tid, s] of this.sessions) if (s.sessionId === sessionId) this.sessions.delete(tid);
     });
     c.on('Page.loadEventFired', (_p, sessionId) => this.onLoad(sessionId));
+    c.on('Runtime.bindingCalled', (p, sessionId) => { if (p && p.name === BINDING) this.onRefreshRequest(sessionId); });
     c.onClose(() => this.onClosed());
 
     await c.send('Target.setDiscoverTargets', { discover: true });
@@ -137,6 +142,7 @@ class Agent {
       // navigated away from the shell: drop our script, leave the page alone
       this.sessions.delete(t.targetId);
       await this.conn.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: s.scriptId }, s.sessionId).catch(() => {});
+      await this.conn.send('Runtime.removeBinding', { name: BINDING }, s.sessionId).catch(() => {});
       await this.conn.send('Target.detachFromTarget', { sessionId: s.sessionId }).catch(() => {});
       say('released target ' + t.targetId.slice(0, 8) + ' (url no longer eligible)');
     }
@@ -158,6 +164,9 @@ class Agent {
       const { sessionId } = await c.send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
       await c.send('Page.enable', {}, sessionId);
       await c.send('Runtime.enable', {}, sessionId);
+      // Before the bar runs, so it sees the refresh channel. A --once client never
+      // listens, so it adds none (the bar then hides its refresh button).
+      if (!opts.once) await c.send('Runtime.addBinding', { name: BINDING }, sessionId);
       const { identifier } = await c.send('Page.addScriptToEvaluateOnNewDocument', { source: this.bar.source }, sessionId);
       const s = { sessionId, scriptId: identifier, url: t.url, targetId: t.targetId };
       this.sessions.set(t.targetId, s);
@@ -212,11 +221,23 @@ class Agent {
     await this.pushAll();
   }
 
+  // The panel's refresh button. Throttled: a request right after a read re-pushes the
+  // current numbers instead of spawning another app-server.
+  async onRefreshRequest(sessionId) {
+    const s = [...this.sessions.values()].find(x => x.sessionId === sessionId);
+    if (!s || this.stopping) return;
+    if (this.polling) await this.polling;
+    else if (Date.now() - this.lastPollAt >= MANUAL_MIN_MS) await this.poll('manual');
+    else { say('manual refresh throttled (last read ' + Math.round((Date.now() - this.lastPollAt) / 1000) + ' s ago)'); await this.pushTo(s); }
+    await evaluate(this.conn, sessionId, REFRESH_DONE).catch(() => {});
+  }
+
   poll(reason) {
     if (this.polling) return this.polling;
     this.polling = (async () => {
       this.lastPollAt = Date.now();
       const bin = findCodex({ app: opts.app });
+      if (bin !== this.codexBin) { this.codexBin = bin; say('limits source: ' + (bin || 'none')); }
       if (!bin) { say('limits: codex binary not found'); await this.pushError('codex binary not found'); return; }
       const out = await rpcFetch(bin);
       if (out.error) { say('limits ERR (' + reason + ') via ' + bin + ': ' + out.error); await this.pushError(out.error); return; }
@@ -287,6 +308,7 @@ class Agent {
     if (this.conn && !this.conn.closed) {
       await Promise.all([...this.sessions.values()].map(async s => {
         await evaluate(this.conn, s.sessionId, REMOVE_BAR, 2000).catch(() => {});
+        await this.conn.send('Runtime.removeBinding', { name: BINDING }, s.sessionId, 2000).catch(() => {});
         await this.conn.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: s.scriptId }, s.sessionId, 2000).catch(() => {});
         await this.conn.send('Target.detachFromTarget', { sessionId: s.sessionId }, undefined, 2000).catch(() => {});
       }));

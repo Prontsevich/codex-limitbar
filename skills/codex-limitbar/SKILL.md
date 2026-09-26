@@ -41,9 +41,12 @@ Repo: https://github.com/Prontsevich/codex-limitbar
    page exists and defines `codexWindowType` + `electronBridge` — and refuses otherwise.
 3. It attaches to the shell page(s), registers `bar.js` with
    `Page.addScriptToEvaluateOnNewDocument` (survives reloads) and evaluates it now.
-4. It spawns the app's bundled `codex app-server` (stdio JSON-RPC,
-   `account/rateLimits/read`) every 5 minutes and after wake, and pushes the numbers via
-   `__sprBarSetLimits`. It exits when the app quits.
+4. It spawns the app's bundled `codex app-server` (`Contents/Resources/codex-cli/bin/codex`
+   since 26.924; stdio JSON-RPC, `account/rateLimits/read`) every 5 minutes, after wake
+   and on the panel's refresh button (a CDP binding, `__sprBarRefreshBinding`), and pushes
+   the numbers via `__sprBarSetLimits`. It exits when the app quits.
+5. Clicking the bar opens a details panel (plan, per-window bars, reset times, reset
+   credits, warnings, `used|left` toggle, refresh) — the one transient overlay.
 
 The bar exists only for launches that went through `start.sh` / the command / the Raycast
 script — a normal launch shows nothing (expected). **The CDP port stays open for the app's
@@ -71,7 +74,7 @@ Requirements: macOS, Node.js >= 22 (`CODEX_LIMITBAR_NODE` overrides discovery), 
 Separate "no data" from "no bar" first:
 
 ```bash
-python3 scripts/probe_rate_limits.py /Applications/ChatGPT.app/Contents/Resources/codex
+python3 scripts/probe_rate_limits.py /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex
 ```
 
 - Probe prints `rateLimits.primary.usedPercent` → the CLI answers; look at injection.
@@ -100,10 +103,11 @@ Checklist:
 
 | Hook | Purpose |
 |------|---------|
-| `__sprBarSetLimits([{name, usedPercent, resetsAtMs}], meta)` | push limits + meta `{live, planType, resetCredits, updatedAtMs, error?}` |
+| `__sprBarSetLimits([{name, usedPercent, resetsAtMs, windowDurationMins?}], meta)` | push limits + meta `{live, planType, resetCredits, resetCreditsNextExpiresAtMs, resetCreditTitle, limitReached, spendControlReached, usageAllowed, updatedAtMs, error?}` |
 | `__sprBarSetMode('used' \| 'left')` | switch the display mode |
-| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme}` |
-| `__sprBarRemove()` | full teardown: removes the bar and restores layout padding |
+| `__sprBarSetPanel(true \| false)` | open / close the details panel |
+| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen}` |
+| `__sprBarRemove()` | full teardown: removes bar + panel and restores layout padding |
 
 ## Caveats
 
