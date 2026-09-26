@@ -3,7 +3,9 @@
 The OpenAI Codex CLI ships a hidden local JSON-RPC server (`codex app-server --listen
 stdio://`) that its own TUI uses. codex-limitbar reads usage through it — the ChatGPT
 desktop app itself talks to the same protocol (its bundled CLI is spawned as
-`codex app-server --analytics-default-enabled`).
+`codex app-server --analytics-default-enabled`). Implementation: `lib/limits.mjs`
+(`rpcFetch`, `parseLimits`, `nameForWindow`, `findCodex`), covered by
+`test/limits.test.mjs` — update both with any shape change.
 
 Verified against codex-cli 0.147.0; re-verified 0.154.0 and the bundled
 0.155.0-alpha.16.4 inside ChatGPT.app — same shape.
@@ -41,7 +43,8 @@ Live response shape (camelCase):
 ## Quick probe
 
 ```bash
-python3 scripts/probe_rate_limits.py [codex-executable]
+python3 scripts/probe_rate_limits.py [codex-executable]   # default: `codex` on PATH
+python3 scripts/probe_rate_limits.py /Applications/ChatGPT.app/Contents/Resources/codex
 ```
 
 Success = JSON printed with `rateLimits.primary` and `usedPercent`. Failure modes are
@@ -53,23 +56,31 @@ Run it under a clean-ish env when the app's isolation is in question:
 
 ## Spawn discipline
 
-Spawn discipline (keeps the child well-behaved inside an app process):
+Spawn discipline (as implemented in `rpcFetch`; keeps the child well-behaved and blind to
+where the agent was started):
 
 - `spawn(bin, ['app-server', '--listen', 'stdio://'])` with `cwd: os.tmpdir()`,
   `env` = copy with `PWD` overridden and `OLDPWD` / `INIT_CWD` deleted (privacy isolation),
   `stdio: ['pipe', 'pipe', 'ignore']`.
 - 15 s timeout; `SIGTERM` after the answer. Consume stdout as a line buffer; skip
   notifications; act on the id-1 ack, then the id-2 response.
-- Response is bounded (~1 MiB); a hung server = timeout, not a protocol break.
+- Request ids are fixed: `1` for `initialize`, `2` for `account/rateLimits/read`. The
+  `initialize` params carry only `clientInfo` (`name`, `title`, `version`) — no
+  `protocolVersion`.
+- Responses are small; the reader gives up above 4 MiB of buffered output. A hung server =
+  timeout, not a protocol break.
 
 ## Choosing the binary
 
-Preference order (the first that answers wins):
+`findCodex` in `lib/limits.mjs` takes the first executable candidate:
 
 1. The app's own bundled CLI: `<App.app>/Contents/Resources/codex` — same version the UI
-   talks to, and no separate install required. In an injected bridge resolve it from
-   `app.getAppPath()` and strip `/app.asar` from the tail (sibling `codex`).
-2. A standalone `codex` on `PATH` (`~/.local/bin/codex`, mise shims, Homebrew).
+   talks to, no separate install required (`--app` / `CODEX_LIMITBAR_APP` select the app).
+2. `codex` in every `PATH` directory.
+3. `~/.local/bin/codex`, `~/.local/share/mise/shims/codex`, `/opt/homebrew/bin/codex`,
+   `/usr/local/bin/codex`.
+
+Paths are built with `node:path` (platform-neutral; `codex.exe` on Windows).
 
 ## Diagnosing "limits unavailable"
 
