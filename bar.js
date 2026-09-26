@@ -21,7 +21,7 @@
 // it reserves space (padding on the layout container) and never overlays app UI.
 // The details panel is the one exception: a transient, user-opened overlay.
 (() => {
-  const BAR_VERSION = 23;
+  const BAR_VERSION = 24;
   const ID = 'spr-statusbar';
   const PANEL_ID = ID + '-panel';
   const STYLE_ID = ID + '-style';
@@ -367,8 +367,7 @@
       shown: Math.round(st.mode === 'left' ? remaining : used),
       fill: st.mode === 'left' ? remaining : used,
       word: st.mode === 'left' ? 'left' : 'used',
-      left: l.resetsAtMs ? fmtLeft(l.resetsAtMs - Date.now()) : null,
-      exact: l.resetsAtMs ? new Date(l.resetsAtMs).toLocaleString() : 'reset time not reported'
+      left: l.resetsAtMs ? fmtLeft(l.resetsAtMs - Date.now()) : null
     };
   };
 
@@ -399,9 +398,9 @@
     }
     html += '<span class="spr-end spr-spacer">' + statusDot() + CHEVRON + '</span>';
     if (html !== lastHtml) { bar.innerHTML = html; lastHtml = html; }
-    const tip = !hasData() ? 'Codex usage limits'
-      : (isStale() ? 'stale' : 'live') + ' · updated ' + hhmm(st.meta.updatedAtMs) + ' — click for details';
-    if (bar.title !== tip) bar.title = tip;
+    const label = !hasData() ? 'Codex usage limits, open details'
+      : 'Codex usage limits, ' + (isStale() ? 'stale' : 'live') + ', updated ' + hhmm(st.meta.updatedAtMs) + ', open details';
+    if (bar.getAttribute('aria-label') !== label) bar.setAttribute('aria-label', label);
   };
 
   const panelHTML = () => {
@@ -410,12 +409,12 @@
     let h = '<div class="spr-sec"><div class="spr-head"><span class="spr-title">Codex</span>';
     if (m.planType) h += '<span class="spr-badge">' + esc(m.planType) + '</span>';
     if (canRefresh()) {
-      h += '<button class="spr-icon" type="button" data-spr-refresh aria-label="Refresh limits" title="Refresh now"'
+      h += '<button class="spr-icon" type="button" data-spr-refresh aria-label="Refresh limits"'
         + (refreshing ? ' aria-busy="true"' : '') + '>' + REFRESH + '</button>';
     }
     h += '</div><div class="spr-sub">';
     if (m.updatedAtMs) {
-      h += statusDot() + '<span title="' + esc(new Date(m.updatedAtMs).toLocaleString()) + '">'
+      h += statusDot() + '<span>'
         + (isStale() ? 'Stale · updated ' : 'Updated ') + fmtAgo(Date.now() - m.updatedAtMs) + '</span>';
     } else {
       h += statusDot() + '<span>' + (m.error ? 'Limits unavailable' : 'Waiting for the first read…') + '</span>';
@@ -429,7 +428,7 @@
         h += '<div class="spr-lim"><div class="spr-lname">' + esc(titleFor(l)) + '</div>'
           + '<div class="spr-bar spr-' + u.lvl + '"><span class="spr-fill" style="width:' + u.fill + '%"></span></div>'
           + '<div class="spr-row"><span><b class="spr-' + u.lvl + '">' + u.shown + '%</b> ' + u.word + '</span>'
-          + '<span title="' + esc(u.exact) + '">' + (u.left ? 'Resets in ' + u.left : 'Reset time not reported') + '</span></div></div>';
+          + '<span>' + (u.left ? 'Resets in ' + u.left : 'Reset time not reported') + '</span></div></div>';
       }
       h += '</div>';
     }
@@ -438,7 +437,7 @@
       h += '<div class="spr-hr"></div><div class="spr-sec">'
         + '<div class="spr-strong">' + m.resetCredits + ' rate-limit reset' + (m.resetCredits === 1 ? '' : 's') + ' available</div>';
       if (m.resetCreditsNextExpiresAtMs) {
-        h += '<div class="spr-muted" title="' + esc(new Date(m.resetCreditsNextExpiresAtMs).toLocaleString()) + '">Next expires in '
+        h += '<div class="spr-muted">Next expires in '
           + fmtLeft(m.resetCreditsNextExpiresAtMs - Date.now()) + '</div>';
       }
       if (m.resetCreditTitle) h += '<div class="spr-muted">' + esc(m.resetCreditTitle) + '</div>';

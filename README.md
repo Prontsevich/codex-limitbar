@@ -118,8 +118,8 @@ final status line; when the bar is already active it only brings the window forw
   sidebar, composer or any control. The icon rail stays clean.
 - Colors come only from the app's own theme tokens (`--app-color-*`), so the bar follows
   light/dark switches instantly.
-- Per limit: `[name] [mini bar] [NN% used] [time to reset]`; hover the time for the exact
-  reset moment. Color by the amount **remaining**: ≥ 50 green, ≥ 25 yellow, ≥ 10 orange,
+- Per limit: `[name] [mini bar] [NN% used] [time to reset]`. Color by the amount
+  **remaining**: ≥ 50 green, ≥ 25 yellow, ≥ 10 orange,
   < 10 red.
 - A status dot on the far right: green = live, orange = stale (data older than 15 minutes
   or the last read failed). Before the first read the bar says `waiting for data…`.
@@ -131,7 +131,7 @@ bar in the app's own menu style and closes on a click outside, Escape, or a seco
 
 - Header: `Codex`, plan badge, `Updated 3m ago` with the live/stale dot, and a refresh
   button that asks the agent for an immediate read (throttled to one read per 10 s).
-- Per limit: a full-width bar, `NN% used|left` and `Resets in 2h 13m` (hover: exact time).
+- Per limit: a full-width bar, `NN% used|left` and `Resets in 2h 13m`.
 - Reset credits: how many are available, when the next one expires, and its title.
   (Using a credit stays in ChatGPT itself — the panel only shows them.)
 - Warnings when a limit or the spend limit is reached, usage is not allowed, or the last
