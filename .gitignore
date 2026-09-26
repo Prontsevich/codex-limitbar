@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# capture outputs
+last-run.png
+
+# node
+node_modules/
+
+# python
+__pycache__/
+*.pyc
