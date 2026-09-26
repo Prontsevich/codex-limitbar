@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # install-skills.sh — install the repo's agent skills into every detected harness.
 #
 # Usage:
@@ -44,7 +45,16 @@ harness_root() {
 }
 
 ALL_TARGETS="claude cursor codex agents gemini hermes opencode copilot"
-SKILLS="codex-limitbar electron-app-patching"
+# Every skills/<name>/SKILL.md in this repo is a skill to install.
+SKILLS=""
+for f in "$REPO_DIR"/skills/*/SKILL.md; do
+    [ -f "$f" ] || continue
+    SKILLS="$SKILLS $(basename "$(dirname "$f")")"
+done
+if [ -z "$SKILLS" ]; then
+    echo "no skills found under $REPO_DIR/skills" >&2
+    exit 1
+fi
 
 for arg in "$@"; do
     case "$arg" in
