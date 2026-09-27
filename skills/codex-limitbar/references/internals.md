@@ -99,6 +99,9 @@ fallback; theme changes need no JS.
 | Font | `--font-ui-family` |
 | `LIMITS` label | `--font-small-caps-md-size`, `-weight`, `-tracking` |
 | Fallback strip (`.spr-flat`) | `--app-color-background-surface-under`, `--app-color-border` |
+| Pace tick (bar) / marker (panel) | secondary / primary text color; the panel marker is ringed with `--menu-background-color` so it reads over fill and track |
+| Over-pace text (> 10) and run-out line | `--app-color-text-warning` |
+| Settings switches | `--switch-track-width`, `-height`, `--switch-track-color`, `-color-checked`, `--switch-thumb-size`, `-offset`, `-color`, `-shadow` |
 
 ## Lifecycle and hot-swap
 
@@ -113,7 +116,9 @@ fallback; theme changes need no JS.
   bar, panel and style nodes, restores padding exactly, disconnects both observers, clears
   the intervals, refresh timer and the `resize` listener, and deletes the window hooks.
 - Display mode persists in `localStorage['spr-statusbar-mode']` (`uninstall.sh` clears it
-  while the agent's port is known).
+  while the agent's port is known); the pace switch in `spr-statusbar-pace` (`on|off`),
+  notification settings in `spr-statusbar-notify`, sent-notification keys in
+  `spr-statusbar-notified`.
 
 ## States
 
@@ -121,7 +126,8 @@ fallback; theme changes need no JS.
 - `__sprBarSetLimits([], {error})` → `limits unavailable` (the error is in the panel).
 - Limits present → blocks, then a status dot + chevron at the right end. The dot is green
   when live, orange when stale: `!live`, `updatedAtMs` older than 15 min, or `meta.error`
-  set alongside the last good limits. The bar's `title` says `live|stale · updated HH:MM`.
+  set alongside the last good limits. No tooltips; the bar's `aria-label` carries
+  `live|stale, updated HH:MM`.
 - ≤ 720 px wide: label and reset times hidden.
 
 ## Details panel
@@ -140,10 +146,53 @@ fallback; theme changes need no JS.
   window (title from `windowDurationMins`: 5-hour / Daily / N-day / Weekly), reset credits
   (count, next expiry, title — no "Reset now" action), warnings (`limitReached`,
   `spendControlReached`, `usageAllowed: false`, `meta.error`), and the `Show used|left`
-  toggle. Relative times re-render every 10 s while open. All dynamic text goes through
+  toggle, the `Pace marker` switch and the `Notify me` switches. Relative times re-render
+  every 10 s while open. All dynamic text goes through
   `esc()`.
 - `font-variant-numeric: tabular-nums` only on numeric rows: Inter's `tnum` also widens
   the hyphen ("5 - hour").
+
+## Pace
+
+For a window with `windowDurationMins` and `resetsAtMs`:
+`elapsed = clamp(1 − (resetsAtMs − now) / (windowDurationMins·60000), 0, 1)` and
+`delta = usedPercent − elapsed·100`.
+
+- Skipped when the window length or reset time is missing, or `elapsed < 2%`.
+- Marker at `elapsed` (used mode) or `1 − elapsed` (left mode): a 1 px tick on the bar's
+  mini bar, a 2 px ringed marker on the panel's bar.
+- Panel line: `|delta| < 5` → `On pace`; `delta > 0` → `N% over pace` (warning color when
+  `> 10`); `delta < 0` → `N% under pace`. Over pace with a projected run-out
+  `now + (100 − used) / (used / elapsedMs)` before the reset → `At this pace: out in …`.
+- `Pace marker` switch / `__sprBarSetPace(bool)` hides every marker and line.
+
+## Notifications
+
+- Sent from the page with `new Notification('LimitBar · Codex', {body, tag: key})`, so
+  macOS shows them as ChatGPT's (its permission — already granted to `app://-` — and its
+  Notification settings). `Notification.requestPermission()` is never called; without
+  permission the panel shows a hint and nothing is marked as sent. Clicking one focuses
+  the window and opens the panel.
+- Evaluated on every push (`__sprBarSetLimits`) and on the 20 s tick, so a reset is
+  announced on time without waiting for a poll. Before a push replaces the limits, the
+  previous ones are checked for a reset that just happened.
+- Events and dedupe keys (window id = `windowDurationMins`; times rounded to 10-minute
+  slots because `resetsAt` jitters by a second between reads):
+
+  | Event (default) | Condition | Key |
+  |-----------------|-----------|-----|
+  | Reset (on) | weekly window only (`windowDurationMins ≥ 10080`), `now ≥ resetsAtMs`, at most 6 h late, and > 0% had been used | `reset:<mins>:<slot>` |
+  | Credit (on) | next reset credit expires within 24 h | `credit:<slot>` |
+  | < 25% left (off) | remaining < 25 | `low25:<mins>:<slot>` |
+  | < 10% left (off) | remaining < 10 (also marks `low25`, so it never follows) | `low10:<mins>:<slot>` |
+
+- Keys live in `localStorage['spr-statusbar-notified']` (shared by all shell windows,
+  pruned after 45 days). Settings in `spr-statusbar-notify`
+  (`{reset, credit, low25, low10}`).
+- Test hooks: `__sprBarSetNotifyDryRun(true)` records would-be notifications in
+  `__sprBarGetState().notify.log` with an in-memory dedupe (localStorage untouched);
+  `__sprBarTestNotify()` shows one `LimitBar · test` banner; `__sprBarSetNotify({...})`
+  changes settings.
 
 ## Live data path
 
@@ -182,6 +231,11 @@ Project the bar's state into a small JSON with `scripts/cdp-eval.mjs`:
   barTop + 12)` hits the bar at several x positions; covered-visible element count in the
   bar strip is 0.
 - `location.reload()` → log `reload: bar present`, live numbers return, panel closed.
+- Pace: `__sprBarSetPace(false)` → no `.spr-tick` / `.spr-mark` / `.spr-pace` nodes;
+  `true` brings them back.
+- Notifications: with `__sprBarSetNotifyDryRun(true)` push synthetic limits and check the
+  log — reset, both thresholds, credit expiry, no repeat on a second push, nothing with the
+  settings off; turn dry-run off after restoring the real limits.
 - Panel: `__sprBarSetPanel(true)` → one `#spr-statusbar-panel`, `aria-expanded="true"`;
   a synthetic `pointerdown` on `#root` and an Escape `keydown` both close it; the refresh
   button logs `limits live (manual)` and a second click within 10 s logs `throttled`.

@@ -93,6 +93,7 @@ Flags:
 ```bash
 ./start.sh --status    # app pid / CDP port / agent state, changes nothing
 ./start.sh --stop      # stop the agent: the bar disappears live (the port stays open)
+./start.sh --doctor    # read-only diagnostics report (add --json for JSON)
 ./start.sh --capture   # run as usual + save last-run.png of the main window
 ```
 
@@ -120,7 +121,7 @@ final status line; when the bar is already active it only brings the window forw
   light/dark switches instantly.
 - Per limit: `[name] [mini bar] [NN% used] [time to reset]`. Color by the amount
   **remaining**: ≥ 50 green, ≥ 25 yellow, ≥ 10 orange,
-  < 10 red.
+  < 10 red. A thin tick on the mini bar marks the even-pace point (see below).
 - A status dot on the far right: green = live, orange = stale (data older than 15 minutes
   or the last read failed). Before the first read the bar says `waiting for data…`.
 - One limit row is normal — the 5-hour window is suspended for many accounts.
@@ -132,11 +133,25 @@ bar in the app's own menu style and closes on a click outside, Escape, or a seco
 - Header: `Codex`, plan badge, `Updated 3m ago` with the live/stale dot, and a refresh
   button that asks the agent for an immediate read (throttled to one read per 10 s).
 - Per limit: a full-width bar, `NN% used|left` and `Resets in 2h 13m`.
+- **Pace**: a marker on each bar shows where usage would be if spread evenly over the
+  window, and a line under it reads `On pace`, `12% over pace` or `8% under pace`. When you
+  are over pace and would run out before the reset: `At this pace: out in 2d 4h`. Pace is
+  skipped in the first 2% of a window. Turn it off with the `Pace marker` switch.
 - Reset credits: how many are available, when the next one expires, and its title.
   (Using a credit stays in ChatGPT itself — the panel only shows them.)
 - Warnings when a limit or the spend limit is reached, usage is not allowed, or the last
   read failed (with the error).
-- `Show used | left` toggle (persisted; applies to the bar too).
+- `Show used | left` toggle and the `Pace marker` switch (both persisted; apply to the bar
+  too).
+- **Notify me** — macOS notifications, sent through the ChatGPT page, so they appear as
+  ChatGPT's own (its icon and its settings in System Settings → Notifications), always
+  titled `LimitBar · Codex`. Each event fires at most once per window cycle:
+  - the weekly limit has reset (if any of it had been used; 5-hour resets are not announced) — **on** by default;
+  - a reset credit expires within 24 h — **on** by default;
+  - less than 25% / less than 10% left — off by default.
+
+  They only arrive while a ChatGPT window with the bar is open. If ChatGPT's notifications
+  are off, the panel says so; the bar never asks for permission itself.
 
 ## Uninstall
 
@@ -156,6 +171,12 @@ and reopen ChatGPT yourself. `./install.sh --uninstall` does the same. Delete th
 directory afterwards.
 
 ## Troubleshooting
+
+Run `./start.sh --doctor` first. It checks macOS/Node, the app version, the bundled CLI, a
+live limits read, the debugging port and its owner, the shell page (layout, theme tokens),
+the bar and the agent, and ends with the relevant log lines — each line marked ✓ / ! / ✗
+with a hint. It is read-only (never restarts ChatGPT or the agent) and prints no tokens or
+account ids, so **paste its output into issues** as is.
 
 Files:
 
@@ -194,7 +215,11 @@ Evaluate in the shell page, e.g.
 | `__sprBarSetLimits([{name, usedPercent, resetsAtMs, windowDurationMins?}], meta)` | push limits + `{live, planType, resetCredits, resetCreditsNextExpiresAtMs, resetCreditTitle, limitReached, spendControlReached, usageAllowed, updatedAtMs, error?}` |
 | `__sprBarSetMode('used' \| 'left')` | switch display mode |
 | `__sprBarSetPanel(true \| false)` | open / close the details panel |
-| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen}` |
+| `__sprBarSetPace(true \| false)` | show / hide the pace markers and lines |
+| `__sprBarSetNotify({reset, credit, low25, low10})` | change notification settings |
+| `__sprBarTestNotify()` | send one `LimitBar · test` notification |
+| `__sprBarSetNotifyDryRun(true \| false)` | record would-be notifications in state instead of showing them (tests) |
+| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen, pace, notify: {settings, permission, dryRun, log}}` |
 | `__sprBarRemove()` | full teardown, restores the layout exactly |
 
 ## Development

@@ -71,7 +71,14 @@ Requirements: macOS, Node.js >= 22 (`CODEX_LIMITBAR_NODE` overrides discovery), 
 
 ## Diagnosing the bar
 
-Separate "no data" from "no bar" first:
+Start with the read-only report — it covers every layer below in one run (exit 1 when
+something failed; `--json` for machine-readable output):
+
+```bash
+./start.sh --doctor
+```
+
+Then, if needed, separate "no data" from "no bar" by hand:
 
 ```bash
 python3 scripts/probe_rate_limits.py /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex
@@ -106,7 +113,11 @@ Checklist:
 | `__sprBarSetLimits([{name, usedPercent, resetsAtMs, windowDurationMins?}], meta)` | push limits + meta `{live, planType, resetCredits, resetCreditsNextExpiresAtMs, resetCreditTitle, limitReached, spendControlReached, usageAllowed, updatedAtMs, error?}` |
 | `__sprBarSetMode('used' \| 'left')` | switch the display mode |
 | `__sprBarSetPanel(true \| false)` | open / close the details panel |
-| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen}` |
+| `__sprBarSetPace(true \| false)` | show / hide the pace markers and lines |
+| `__sprBarSetNotify({reset, credit, low25, low10})` | change notification settings |
+| `__sprBarTestNotify()` | send one `LimitBar · test` notification |
+| `__sprBarSetNotifyDryRun(true \| false)` | record would-be notifications in state instead of showing them (tests) |
+| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen, pace, notify}` |
 | `__sprBarRemove()` | full teardown: removes bar + panel and restores layout padding |
 
 ## Caveats

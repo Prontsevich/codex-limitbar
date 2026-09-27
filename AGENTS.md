@@ -33,7 +33,8 @@ DevTools Protocol — no bundle modification. Two parts:
   `__sprBarState` / `__sprBarInstance`, the CDP binding `__sprBarRefreshBinding`,
   `#spr-statusbar`, `#spr-statusbar-panel`, `#spr-statusbar-style`,
   `data-spr-padded` / `data-spr-orig-pad` / `data-spr-version`,
-  `spr-statusbar-mode` (localStorage key), state dir
+  `spr-statusbar-mode` / `spr-statusbar-pace` / `spr-statusbar-notify` /
+  `spr-statusbar-notified` (localStorage keys), state dir
   `~/Library/Application Support/spr-limitbar/`, log
   `~/Library/Logs/spr-limitbar.log`. New DOM/global/storage/file names must
   follow.
@@ -56,6 +57,12 @@ DevTools Protocol — no bundle modification. Two parts:
 - **Colors come from the app's theme tokens** (`--app-color-*` and related,
   with fallbacks) — no hardcoded theme colors; theme switching must work with
   no JS.
+- **Notifications** (Web Notification API in the page, shown as ChatGPT's own):
+  always titled `LimitBar …`, each event at most once per window cycle (dedupe
+  keys in `spr-statusbar-notified`, reset times rounded to 10 min), and **never
+  call `Notification.requestPermission()`** — without permission the panel shows
+  a hint instead. Test event logic with `__sprBarSetNotifyDryRun(true)`; a live
+  test shows at most one `__sprBarTestNotify()` banner.
 - **Never weaken the identity check** (`lib/cdp.mjs` `verifyIdentity`, mirrored
   in `cdp-eval.mjs`): port owner → CDP endpoint → exact shell page → shell
   globals. Every entry point that evaluates code runs it first.
@@ -86,6 +93,7 @@ node --test                                  # parser / window names / binary lo
 bash -n start.sh install.sh uninstall.sh install-skills.sh raycast/codex-limitbar.sh
 ./start.sh                                   # attach, or relaunch ChatGPT once with a CDP port
 ./start.sh --status                          # note the CDP port
+./start.sh --doctor                          # read-only report: app, CLI, port, page, bar, agent, log
 ```
 
 1. Read the live state (port from `--status`):
