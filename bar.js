@@ -10,7 +10,13 @@
 //              limitReached?, spendControlReached?, usageAllowed?, updatedAtMs, error?}
 //   - window.__sprBarSetMode('used' | 'left')
 //   - window.__sprBarSetPanel(open) — open/close the details panel
-//   - window.__sprBarGetState() -> {version, mode, live, limits, meta, theme, panelOpen}
+//   - window.__sprBarSetPace(bool) — show/hide the pace markers and pace lines
+//   - window.__sprBarSetNotify({reset, credit, low25, low10}) — notification settings
+//   - window.__sprBarTestNotify() — one clearly labelled test notification
+//   - window.__sprBarSetNotifyDryRun(bool) — record would-be notifications instead of
+//       showing them (in-memory dedupe while on; for tests)
+//   - window.__sprBarGetState() -> {version, mode, live, limits, meta, theme, panelOpen,
+//       pace, notify: {settings, permission, dryRun, log}}
 //   - window.__sprBarRemove() -> full teardown, restores the layout exactly
 //   - window.__sprBarRefreshBinding(payload) — CDP binding added by the helper (the
 //       panel's refresh button); absent for --once clients, then the button is hidden.
@@ -20,12 +26,27 @@
 // light/dark theme with no JS. The bar only appears once the app layout is found:
 // it reserves space (padding on the layout container) and never overlays app UI.
 // The details panel is the one exception: a transient, user-opened overlay.
+// Notifications go through the page's Web Notification API, so macOS shows them as
+// ChatGPT's own (its icon, its Notification settings). They are always prefixed
+// "LimitBar", fire at most once per window cycle, and permission is never requested.
 (() => {
-  const BAR_VERSION = 24;
+  const BAR_VERSION = 26;
   const ID = 'spr-statusbar';
   const PANEL_ID = ID + '-panel';
   const STYLE_ID = ID + '-style';
   const LS_KEY = 'spr-statusbar-mode';
+  const PACE_KEY = 'spr-statusbar-pace';
+  const NOTIFY_KEY = 'spr-statusbar-notify';
+  const NOTIFIED_KEY = 'spr-statusbar-notified';
+  const NOTIFY_DEFAULTS = { reset: true, credit: true, low25: false, low10: false };
+  const NOTIFY_TITLE = 'LimitBar · Codex';
+  const DEDUPE_TTL_MS = 45 * 86400000;
+  const RESET_NOTIFY_MAX_LATE_MS = 6 * 3600000;   // a reset seen much later is old news
+  const WEEKLY_MINS = 10080;                       // only the weekly window's reset is announced
+  const CREDIT_WARN_MS = 24 * 3600000;
+  const PACE_MIN_ELAPSED = 0.02;                   // too early in a window to judge pace
+  const PACE_ON_BAND = 5;                          // |delta| below this reads "On pace"
+  const PACE_WARN = 10;                            // over pace by more than this = warning
   const H = 28;
   const STALE_MS = 15 * 60 * 1000;
   const REFRESH_TIMEOUT_MS = 20000;
@@ -46,9 +67,19 @@
     try { return localStorage.getItem(LS_KEY) === 'left' ? 'left' : 'used'; } catch (err) { return 'used'; }
   };
   const writeMode = m => { try { localStorage.setItem(LS_KEY, m); } catch (err) {} };
+  const readJSON = (k, def) => { try { const v = JSON.parse(localStorage.getItem(k)); return v && typeof v === 'object' ? v : def; } catch (err) { return def; } };
+  const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (err) {} };
+  const readPace = () => { try { return localStorage.getItem(PACE_KEY) !== 'off'; } catch (err) { return true; } };
+  const readNotify = () => {
+    const v = readJSON(NOTIFY_KEY, {}), out = {};
+    for (const k of Object.keys(NOTIFY_DEFAULTS)) out[k] = typeof v[k] === 'boolean' ? v[k] : NOTIFY_DEFAULTS[k];
+    return out;
+  };
 
   // Sticky state: survives re-injection, so pushed limits are not lost on a hot-swap.
   const st = window.__sprBarState = window.__sprBarState || { mode: readMode(), live: false, meta: null, limits: null };
+  let pace = readPace();
+  let notifySettings = readNotify();
 
   const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
   // Traffic light by REMAINING amount, mapped to the app's semantic text tokens
@@ -77,6 +108,93 @@
   const hasData = () => Array.isArray(st.limits) && st.limits.length > 0;
   const isStale = () => !st.live || !st.meta || !st.meta.updatedAtMs || Date.now() - st.meta.updatedAtMs > STALE_MS || !!st.meta.error;
   const canRefresh = () => typeof window.__sprBarRefreshBinding === 'function';
+
+  // ---- pace -----------------------------------------------------------------------------
+  // elapsed: share of the window already gone; delta: used% minus the even-pace used%.
+  // Over pace and on track to run out before the reset → runOutMs until that happens.
+  const paceFor = l => {
+    const winMs = (Number(l.windowDurationMins) || 0) * 60000;
+    if (!winMs || !l.resetsAtMs) return null;
+    const now = Date.now();
+    const elapsed = clamp(1 - (l.resetsAtMs - now) / winMs, 0, 1);
+    if (elapsed < PACE_MIN_ELAPSED) return null;
+    const used = clamp(Number(l.usedPercent) || 0, 0, 100);
+    const delta = used - elapsed * 100;
+    let runOutMs = null;
+    if (delta > 0 && used > 0 && used < 100) {
+      const outAt = now + (100 - used) / (used / (elapsed * winMs));
+      if (outAt < l.resetsAtMs) runOutMs = outAt - now;
+    }
+    return { elapsed, delta, runOutMs };
+  };
+  // Where the even-pace point sits on a bar that shows used (fill = used) or left.
+  const markPos = pc => Math.round((st.mode === 'left' ? 1 - pc.elapsed : pc.elapsed) * 1000) / 10;
+
+  // ---- notifications ------------------------------------------------------------------
+  // Keys are rounded to 10 minutes: the server's resetsAt jitters by a second or so
+  // between reads, and one window cycle must map to exactly one key.
+  const slot = ms => Math.round(ms / 600000);
+  let notifyDryRun = false;
+  let dryStore = {};
+  let dryLog = [];
+  const notifyPermission = () => (typeof Notification === 'function' ? Notification.permission : 'unsupported');
+  const canNotify = () => notifyPermission() === 'granted';
+  const loadNotified = () => notifyDryRun ? dryStore : readJSON(NOTIFIED_KEY, {});
+  const markNotified = key => {
+    if (notifyDryRun) { dryStore[key] = Date.now(); return; }
+    const all = readJSON(NOTIFIED_KEY, {}), now = Date.now();
+    for (const k of Object.keys(all)) if (!(now - all[k] < DEDUPE_TTL_MS)) delete all[k];
+    all[key] = now;
+    writeJSON(NOTIFIED_KEY, all);
+  };
+  const show = (title, body, tag) => {
+    const n = new Notification(title, { body, tag });
+    n.onclick = () => { try { window.focus(); } catch (err) {} setPanel(true); };
+    return n;
+  };
+  // Fires one event at most once (per key). Without permission nothing is marked, so
+  // nothing fires later in a burst once notifications get enabled.
+  const notify = (key, body) => {
+    if (loadNotified()[key]) return false;
+    if (notifyDryRun) { markNotified(key); dryLog.push({ key, body }); return true; }
+    if (!canNotify()) return false;
+    try { show(NOTIFY_TITLE, body, key); markNotified(key); return true; } catch (err) { return false; }
+  };
+  const winName = l => titleFor(l) === 'Weekly' ? 'Weekly limit' : titleFor(l) + ' window';
+
+  // Resets of the given limits (the current ones on every tick, the previous ones right
+  // before a push replaces them), threshold crossings and expiring reset credits.
+  const checkResets = limits => {
+    if (!notifySettings.reset || !Array.isArray(limits)) return;
+    const now = Date.now();
+    for (const l of limits) {
+      if (!l.resetsAtMs || now < l.resetsAtMs || now - l.resetsAtMs > RESET_NOTIFY_MAX_LATE_MS) continue;
+      const weekly = (Number(l.windowDurationMins) || 0) >= WEEKLY_MINS || (!l.windowDurationMins && l.name === 'Weekly');
+      if (!weekly || !((Number(l.usedPercent) || 0) > 0)) continue;   // 5-hour resets are routine; an unused week is no news
+      notify('reset:' + (l.windowDurationMins || l.name) + ':' + slot(l.resetsAtMs), winName(l) + ' has reset — full quota available');
+    }
+  };
+  const checkNotify = () => {
+    if (!hasData()) return;
+    checkResets(st.limits);
+    const now = Date.now();
+    for (const l of st.limits) {
+      if (!l.resetsAtMs || now >= l.resetsAtMs) continue;
+      const left = 100 - clamp(Number(l.usedPercent) || 0, 0, 100);
+      const id = (l.windowDurationMins || l.name) + ':' + slot(l.resetsAtMs);
+      const tail = ': ' + Math.round(left) + '% left (resets in ' + fmtLeft(l.resetsAtMs - now) + ')';
+      // Below 10 also covers 25: one notification, and the 25 one never follows it.
+      if (left < 10 && notifySettings.low10) {
+        if (notify('low10:' + id, winName(l) + tail)) markNotified('low25:' + id);
+      } else if (left < 25 && notifySettings.low25) {
+        notify('low25:' + id, winName(l) + tail);
+      }
+    }
+    const exp = st.meta && st.meta.resetCreditsNextExpiresAtMs;
+    if (notifySettings.credit && exp && exp - now > 0 && exp - now <= CREDIT_WARN_MS) {
+      notify('credit:' + slot(exp), 'A rate-limit reset credit expires in ' + fmtLeft(exp - now));
+    }
+  };
 
   const CHEVRON = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 6.5 5 3.5l3 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const REFRESH = '<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -134,7 +252,9 @@
     '#' + ID + ' .spr-label{color:var(--spr-fg3);font-size:var(--font-small-caps-md-size, 11px);font-weight:var(--font-small-caps-md-weight, 600);letter-spacing:var(--font-small-caps-md-tracking, .65px);text-transform:uppercase}',
     '#' + ID + ' .spr-block{display:inline-flex;align-items:center;gap:8px;min-width:0}',
     '#' + ID + ' .spr-name{color:var(--spr-fg2)}',
-    '#' + ID + ' .spr-track{display:inline-block;width:64px;height:4px;border-radius:999px;background:var(--spr-track);overflow:hidden;flex:none}',
+    '#' + ID + ' .spr-track{position:relative;display:inline-block;width:64px;height:4px;border-radius:999px;background:var(--spr-track);flex:none}',
+    // Even-pace tick on the mini bar: taller than the track so it reads over the fill.
+    '#' + ID + ' .spr-tick{position:absolute;top:-2px;bottom:-2px;width:1px;margin-left:-.5px;background:var(--spr-fg2);border-radius:1px}',
     '#' + ID + ' .spr-val{display:inline-flex;align-items:baseline;gap:4px}',
     '#' + ID + ' .spr-val b{font-weight:600}',
     '#' + ID + ' .spr-val span,#' + ID + ' .spr-reset{color:var(--spr-fg3)}',
@@ -171,7 +291,12 @@
     P + ' .spr-icon[aria-busy="true"]{cursor:progress}',
     P + ' .spr-lim + .spr-lim{margin-top:12px}',
     P + ' .spr-lname{font-weight:500;color:var(--spr-fg)}',
-    P + ' .spr-bar{height:6px;margin:7px 0 6px;border-radius:999px;background:var(--spr-track);overflow:hidden}',
+    P + ' .spr-bar{position:relative;height:6px;margin:7px 0 6px;border-radius:999px;background:var(--spr-track)}',
+    // Even-pace marker: a notch cut out of the panel surface so it reads on fill and track.
+    P + ' .spr-mark{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;border-radius:1px;background:var(--spr-fg);box-shadow:0 0 0 1.5px var(--menu-background-color, var(--app-color-background-elevated-primary-opaque, Canvas))}',
+    P + ' .spr-pace{display:flex;justify-content:space-between;gap:12px;margin-top:2px;font-size:12px;color:var(--spr-fg3)}',
+    P + ' .spr-pace .spr-over{color:var(--spr-fg2)}',
+    P + ' .spr-pace .spr-over.spr-hot{color:var(--spr-low)}',
     P + ' .spr-row{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--spr-fg3)}',
     P + ' .spr-row b{font-weight:600}',
     P + ' .spr-muted{font-size:12px;color:var(--spr-fg3)}',
@@ -186,7 +311,16 @@
     P + ' .spr-toggle button.on{background:var(--color-background-mode-toggle-selected, var(--app-color-background-control, transparent));color:var(--color-text-mode-toggle-primary, var(--spr-fg));box-shadow:0 0 0 .5px var(--color-border-mode-toggle-selected, transparent)}',
     P + ' .spr-toggle button:focus-visible{box-shadow:inset 0 0 0 1px var(--spr-fg3)}',
     P + ' .spr-source{margin-top:8px;font-size:11px;color:var(--spr-fg3)}',
-    '@media (prefers-reduced-motion:reduce){' + P + '{animation:none}' + P + ' .spr-icon[aria-busy="true"] svg{animation:none}#' + ID + ' .spr-end svg{transition:none}}'
+    P + ' .spr-h{margin-bottom:4px;color:var(--spr-fg3);font-size:var(--font-small-caps-md-size, 11px);font-weight:var(--font-small-caps-md-weight, 600);letter-spacing:var(--font-small-caps-md-tracking, .65px);text-transform:uppercase}',
+    P + ' .spr-opt{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:26px;font-size:12px;color:var(--spr-fg2)}',
+    // Switches use the app's own switch tokens (track, thumb, checked accent).
+    P + ' .spr-sw{all:unset;box-sizing:border-box;position:relative;flex:none;width:var(--switch-track-width, 32px);height:var(--switch-track-height, 19px);border-radius:999px;background:var(--switch-track-color, var(--spr-track));cursor:pointer;transition:background-color .15s ease}',
+    P + ' .spr-sw::after{content:"";position:absolute;top:var(--switch-thumb-offset, 3px);left:var(--switch-thumb-offset, 3px);width:var(--switch-thumb-size, 13px);height:var(--switch-thumb-size, 13px);border-radius:50%;background:var(--switch-thumb-color, #fff);box-shadow:var(--switch-thumb-shadow, 0 1px 2px rgba(0,0,0,.2));transition:transform .15s ease}',
+    P + ' .spr-sw[aria-checked="true"]{background:var(--switch-track-color-checked, var(--spr-ok-fill))}',
+    P + ' .spr-sw[aria-checked="true"]::after{transform:translateX(calc(var(--switch-track-width, 32px) - var(--switch-thumb-size, 13px) - 2 * var(--switch-thumb-offset, 3px)))}',
+    P + ' .spr-sw:focus-visible{box-shadow:0 0 0 1.5px var(--spr-fg3)}',
+    P + ' .spr-hint{margin-top:4px;font-size:11px;color:var(--spr-fg3)}',
+    '@media (prefers-reduced-motion:reduce){' + P + '{animation:none}' + P + ' .spr-icon[aria-busy="true"] svg{animation:none}#' + ID + ' .spr-end svg,' + P + ' .spr-sw,' + P + ' .spr-sw::after{transition:none}}'
   ].join('\n');
 
   // ---- layout discovery ---------------------------------------------------------------
@@ -267,7 +401,14 @@
       render();
       return;
     }
-    if (el.closest('[data-spr-refresh]')) requestRefresh();
+    if (el.closest('[data-spr-refresh]')) { requestRefresh(); return; }
+    const sw = el.closest('[data-spr-switch]');
+    if (sw) {
+      const key = sw.getAttribute('data-spr-switch');
+      const on = sw.getAttribute('aria-checked') !== 'true';
+      if (key === 'pace') setPace(on);
+      else if (key.startsWith('notify:')) setNotify({ [key.slice(7)]: on });
+    }
   };
 
   const requestRefresh = () => {
@@ -373,10 +514,12 @@
 
   const blockHTML = l => {
     const u = usage(l);
-    // Layout: [name] [mini bar] [NN% used] [time-to-reset]
+    const pc = pace ? paceFor(l) : null;
+    // Layout: [name] [mini bar + even-pace tick] [NN% used] [time-to-reset]
     return '<span class="spr-block">'
       + '<span class="spr-name">' + esc(l.name) + '</span>'
-      + '<span class="spr-track spr-' + u.lvl + '"><span class="spr-fill" style="width:' + u.fill + '%"></span></span>'
+      + '<span class="spr-track spr-' + u.lvl + '"><span class="spr-fill" style="width:' + u.fill + '%"></span>'
+      + (pc ? '<span class="spr-tick" style="left:' + markPos(pc) + '%"></span>' : '') + '</span>'
       + '<span class="spr-val"><b class="spr-' + u.lvl + '">' + u.shown + '%</b><span>' + u.word + '</span></span>'
       + '<span class="spr-reset">' + (u.left || '—') + '</span>'
       + '</span>';
@@ -403,6 +546,19 @@
     if (bar.getAttribute('aria-label') !== label) bar.setAttribute('aria-label', label);
   };
 
+  const paceHTML = pc => {
+    const d = Math.round(pc.delta);
+    let left;
+    if (Math.abs(pc.delta) < PACE_ON_BAND) left = '<span>On pace</span>';
+    else if (pc.delta > 0) left = '<span class="spr-over' + (pc.delta > PACE_WARN ? ' spr-hot' : '') + '">' + d + '% over pace</span>';
+    else left = '<span>' + (-d) + '% under pace</span>';
+    const right = pc.runOutMs != null ? '<span class="spr-over spr-hot">At this pace: out in ' + fmtLeft(pc.runOutMs) + '</span>' : '';
+    return '<div class="spr-pace">' + left + right + '</div>';
+  };
+  const switchHTML = (key, label, on) =>
+    '<div class="spr-opt"><span>' + esc(label) + '</span>'
+    + '<button type="button" class="spr-sw" role="switch" data-spr-switch="' + key + '" aria-checked="' + (!!on) + '" aria-label="' + esc(label) + '"></button></div>';
+
   const panelHTML = () => {
     const m = st.meta || {};
     const data = hasData();
@@ -425,10 +581,13 @@
       h += '<div class="spr-hr"></div><div class="spr-sec">';
       for (const l of st.limits) {
         const u = usage(l);
+        const pc = pace ? paceFor(l) : null;
         h += '<div class="spr-lim"><div class="spr-lname">' + esc(titleFor(l)) + '</div>'
-          + '<div class="spr-bar spr-' + u.lvl + '"><span class="spr-fill" style="width:' + u.fill + '%"></span></div>'
+          + '<div class="spr-bar spr-' + u.lvl + '"><span class="spr-fill" style="width:' + u.fill + '%"></span>'
+          + (pc ? '<span class="spr-mark" style="left:' + markPos(pc) + '%"></span>' : '') + '</div>'
           + '<div class="spr-row"><span><b class="spr-' + u.lvl + '">' + u.shown + '%</b> ' + u.word + '</span>'
-          + '<span>' + (u.left ? 'Resets in ' + u.left : 'Reset time not reported') + '</span></div></div>';
+          + '<span>' + (u.left ? 'Resets in ' + u.left : 'Reset time not reported') + '</span></div>'
+          + (pc ? paceHTML(pc) : '') + '</div>';
       }
       h += '</div>';
     }
@@ -460,7 +619,15 @@
       + '<button type="button" data-spr-mode="used" class="' + (st.mode === 'used' ? 'on' : '') + '" aria-pressed="' + (st.mode === 'used') + '">used</button>'
       + '<button type="button" data-spr-mode="left" class="' + (st.mode === 'left' ? 'on' : '') + '" aria-pressed="' + (st.mode === 'left') + '">left</button>'
       + '</span></div>'
-      + '<div class="spr-source">Local app-server · refreshes every 5 min</div></div>';
+      + switchHTML('pace', 'Pace marker', pace) + '</div>';
+
+    h += '<div class="spr-hr"></div><div class="spr-sec"><div class="spr-h">Notify me</div>'
+      + switchHTML('notify:reset', 'When the weekly limit resets', notifySettings.reset)
+      + switchHTML('notify:credit', 'Reset credit expires within 24 h', notifySettings.credit)
+      + switchHTML('notify:low25', 'Less than 25% left', notifySettings.low25)
+      + switchHTML('notify:low10', 'Less than 10% left', notifySettings.low10);
+    if (!canNotify()) h += '<div class="spr-hint">Enable notifications for ChatGPT in System Settings</div>';
+    h += '<div class="spr-source">Local app-server · refreshes every 5 min</div></div>';
     return h;
   };
 
@@ -471,13 +638,14 @@
     if (html !== lastPanelHtml) {
       // Keep keyboard focus on the same control across a re-render.
       const a = document.activeElement;
-      const key = a && p.contains(a) ? (a.getAttribute('data-spr-mode') || (a.hasAttribute('data-spr-refresh') ? 'refresh' : null)) : null;
+      const sel = a && p.contains(a)
+        ? (a.hasAttribute('data-spr-refresh') ? '[data-spr-refresh]'
+          : a.hasAttribute('data-spr-mode') ? '[data-spr-mode="' + a.getAttribute('data-spr-mode') + '"]'
+          : a.hasAttribute('data-spr-switch') ? '[data-spr-switch="' + a.getAttribute('data-spr-switch') + '"]' : null)
+        : null;
       p.innerHTML = html;
       lastPanelHtml = html;
-      if (key) {
-        const again = key === 'refresh' ? p.querySelector('[data-spr-refresh]') : p.querySelector('[data-spr-mode="' + key + '"]');
-        if (again) again.focus();
-      }
+      if (sel) { const again = p.querySelector(sel); if (again) again.focus(); }
     }
     placePanel();
   }
@@ -552,6 +720,9 @@
   // ---- lifecycle -------------------------------------------------------------------------
   let tick = 0, debounce = 0, mo = null, started = false;
   const onResize = () => apply();
+  // The tick also drives notifications, so a reset is announced on time without
+  // waiting for the next poll.
+  const onTick = () => { apply(); try { checkNotify(); } catch (err) {} };
   const onReady = () => start();
 
   const needsApply = () => {
@@ -570,8 +741,9 @@
     started = true;
     document.removeEventListener('DOMContentLoaded', onReady);
     apply();
-    // Countdown refresh + periodic safety re-apply.
-    tick = setInterval(apply, 20000);
+    try { checkNotify(); } catch (err) {}
+    // Countdown refresh + periodic safety re-apply + notification checks.
+    tick = setInterval(onTick, 20000);
     addEventListener('resize', onResize);
     if (typeof ResizeObserver === 'function') { ro = new ResizeObserver(() => apply()); observeSizes(); }
     // React re-renders / route switches can drop the padding or the layout node.
@@ -599,7 +771,9 @@
     for (const el of document.querySelectorAll('[data-spr-padded]')) restorePad(el);
     layouts = []; card = null; lastHtml = ''; lastPanelHtml = '';
     if (window.__sprBarInstance === instance) delete window.__sprBarInstance;
-    for (const k of ['__sprBarSetLimits', '__sprBarSetMode', '__sprBarSetPanel', '__sprBarGetState', '__sprBarRemove', '__sprBarRefreshDone']) {
+    notifyDryRun = false; dryStore = {}; dryLog = [];
+    for (const k of ['__sprBarSetLimits', '__sprBarSetMode', '__sprBarSetPanel', '__sprBarGetState', '__sprBarRemove', '__sprBarRefreshDone',
+      '__sprBarSetPace', '__sprBarSetNotify', '__sprBarTestNotify', '__sprBarSetNotifyDryRun']) {
       try { delete window[k]; } catch (err) {}
     }
   };
@@ -607,8 +781,23 @@
   const instance = { version: BAR_VERSION, apply, remove };
   window.__sprBarInstance = instance;
 
+  function setPace(on) {
+    pace = !!on;
+    try { localStorage.setItem(PACE_KEY, pace ? 'on' : 'off'); } catch (err) {}
+    render();
+  }
+  function setNotify(partial) {
+    for (const k of Object.keys(NOTIFY_DEFAULTS)) {
+      if (partial && typeof partial[k] === 'boolean') notifySettings[k] = partial[k];
+    }
+    writeJSON(NOTIFY_KEY, notifySettings);
+    renderPanel();
+    try { checkNotify(); } catch (err) {}
+  }
+
   window.__sprBarSetLimits = (arr, meta) => {
     try {
+      const prevLimits = st.limits;
       st.limits = (arr || []).map(l => ({
         name: String(l.name || l.id || '?'),
         usedPercent: Number(l.usedPercent != null ? l.usedPercent : l.used) || 0,
@@ -618,15 +807,29 @@
       if (meta) { st.live = !!meta.live; st.meta = meta; }
       refreshDone();
       render();
+      // A push after a reset replaces the old window: announce that reset first.
+      try { checkResets(prevLimits); checkNotify(); } catch (err) {}
       return true;
     } catch (err) { return false; }
   };
   window.__sprBarSetMode = m => { st.mode = m === 'left' ? 'left' : 'used'; writeMode(st.mode); render(); };
   window.__sprBarSetPanel = open => { setPanel(open); return panelOpen; };
   window.__sprBarRefreshDone = refreshDone;
+  window.__sprBarSetPace = on => { setPace(on); return pace; };
+  window.__sprBarSetNotify = partial => { setNotify(partial); return Object.assign({}, notifySettings); };
+  window.__sprBarTestNotify = () => {
+    if (!canNotify()) return { ok: false, permission: notifyPermission() };
+    try { show('LimitBar · test', 'Test notification from codex-limitbar', 'spr-test'); return { ok: true, permission: 'granted' }; }
+    catch (err) { return { ok: false, error: String((err && err.message) || err) }; }
+  };
+  window.__sprBarSetNotifyDryRun = on => {
+    notifyDryRun = !!on; dryStore = {}; dryLog = [];
+    return notifyDryRun;
+  };
   window.__sprBarGetState = () => ({
     version: BAR_VERSION, mode: st.mode, live: st.live, meta: st.meta, limits: st.limits,
-    theme: document.documentElement.dataset.theme || null, panelOpen
+    theme: document.documentElement.dataset.theme || null, panelOpen, pace,
+    notify: { settings: Object.assign({}, notifySettings), permission: notifyPermission(), dryRun: notifyDryRun, log: dryLog.slice() }
   });
   window.__sprBarRemove = remove;
 

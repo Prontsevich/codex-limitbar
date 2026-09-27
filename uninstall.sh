@@ -67,13 +67,13 @@ for pid in $agents; do
     if [ "$DRY" -eq 1 ]; then
         echo "would: stop agent pid $pid (removes the bar from the window)"
     else
-        # the bar keeps a display-mode preference in the page's localStorage; clear it
+        # the bar keeps its preferences (mode, pace, notifications) in the page's localStorage; clear them
         # while the agent's port is still known (harmless if this fails)
         port="$(ps -o command= -p "$pid" 2>/dev/null | sed -n 's/.*--port \([0-9][0-9]*\).*/\1/p')"
         node_bin="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
         if [ -n "$port" ] && [ -x "$node_bin" ]; then
             "$node_bin" "$REPO_DIR/skills/codex-limitbar/scripts/cdp-eval.mjs" --port "$port" --app "$APP" \
-                -e "localStorage.removeItem('spr-statusbar-mode'); 'ok'" >/dev/null 2>&1 || true
+                -e "['spr-statusbar-mode','spr-statusbar-pace','spr-statusbar-notify','spr-statusbar-notified'].forEach(k => localStorage.removeItem(k)); 'ok'" >/dev/null 2>&1 || true
         fi
         kill -TERM "$pid" 2>/dev/null || true
         for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
