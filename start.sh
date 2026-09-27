@@ -6,6 +6,7 @@
 #   ./start.sh --capture   # same + save last-run.png of the main window
 #   ./start.sh --status    # report app / port / agent state, change nothing
 #   ./start.sh --stop      # stop the agent: the bar disappears live
+#   ./start.sh --doctor    # read-only diagnostics report (--doctor --json for JSON)
 #
 # How: ChatGPT is launched with --remote-debugging-port=<random 127.0.0.1 port>, then
 # limitbar.mjs (the agent) attaches over CDP, verifies the port belongs to the app,
@@ -23,21 +24,24 @@ while [ -L "$SOURCE" ]; do
 done
 DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 
-usage() { sed -n '2,13p' "$DIR/start.sh" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,14p' "$DIR/start.sh" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 APP="${CODEX_LIMITBAR_APP:-/Applications/ChatGPT.app}"
 BUNDLE_ID="com.openai.codex"
-STATE_DIR="$HOME/Library/Application Support/spr-limitbar"
+STATE_DIR="${CODEX_LIMITBAR_STATE_DIR:-$HOME/Library/Application Support/spr-limitbar}"   # same override as limitbar.mjs
 STATE="$STATE_DIR/agent.json"
 LOG="$HOME/Library/Logs/spr-limitbar.log"
 
 MODE="run"
 CAPTURE=0
+JSON=0
 for arg in "$@"; do
   case "$arg" in
     --capture) CAPTURE=1 ;;
     --status)  MODE="status" ;;
     --stop)    MODE="stop" ;;
+    --doctor)  MODE="doctor" ;;
+    --json)    JSON=1 ;;
     -h|--help) usage 0 ;;
     *) echo "unknown flag: $arg" >&2; usage 2 ;;
   esac
@@ -118,6 +122,19 @@ start_agent() {
 }
 
 # --- main ------------------------------------------------------------------
+
+# Diagnostics run before any other precondition: reporting a missing app or Node
+# is part of their job. Read-only: never touches the app or the agent.
+if [ "$MODE" = "doctor" ]; then
+  NODE="$(find_node)" || {
+    echo "✗ Node  Node.js >= 22 not found"
+    echo "    → install Node 22+, or set CODEX_LIMITBAR_NODE to its path"
+    exit 1
+  }
+  if [ "$JSON" -eq 1 ]; then exec "$NODE" "$DIR/lib/doctor.mjs" --app "$APP" --log "$LOG" --json; fi
+  exec "$NODE" "$DIR/lib/doctor.mjs" --app "$APP" --log "$LOG"
+fi
+[ "$JSON" -eq 0 ] || { echo "--json only goes with --doctor" >&2; usage 2; }
 
 [ -d "$APP" ] || { echo "!! $APP not found"; exit 1; }
 NODE="$(find_node)" || { echo "!! Node.js >= 22 not found (set CODEX_LIMITBAR_NODE to its path)"; exit 1; }
