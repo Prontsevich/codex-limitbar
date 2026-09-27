@@ -11,7 +11,7 @@ app's light/dark theme.
 LIMITS  5h  ▁▁▁▁▁▁  0% used  3h 45m  |  Weekly  ███▄▄▄  73% used  19h 48m                 ● ⌃
 ```
 
-<img src="docs/panel.png" alt="codex-limitbar details panel" width="352">
+<img src="docs/panel.png" alt="codex-limitbar details panel" width="352"> <img src="docs/settings.png" alt="codex-limitbar settings" width="352">
 
 Nothing inside `/Applications/ChatGPT.app` is modified: the bar is injected at runtime into
 the app's local UI over the Chrome DevTools Protocol (CDP).
@@ -130,19 +130,23 @@ final status line; when the bar is already active it only brings the window forw
 **Details panel** — click the bar (or focus it and press Enter/Space). It opens above the
 bar in the app's own menu style and closes on a click outside, Escape, or a second click:
 
-- Header: `Codex`, plan badge, `Updated 3m ago` with the live/stale dot, and a refresh
-  button that asks the agent for an immediate read (throttled to one read per 10 s).
+- Header: `Codex`, plan badge, `Updated 3m ago` with the live/stale dot, a refresh
+  button that asks the agent for an immediate read (throttled to one read per 10 s), and
+  a gear that opens **Settings**.
 - Per limit: a full-width bar, `NN% used|left` and `Resets in 2h 13m`.
 - **Pace**: a marker on each bar shows where usage would be if spread evenly over the
   window, and a line under it reads `On pace`, `12% over pace` or `8% under pace`. When you
   are over pace and would run out before the reset: `At this pace: out in 2d 4h`. Pace is
-  skipped in the first 2% of a window. Turn it off with the `Pace marker` switch.
+  skipped in the first 2% of a window. Turn it off in Settings (`Pace marker`).
 - Reset credits: how many are available, when the next one expires, and its title.
   (Using a credit stays in ChatGPT itself — the panel only shows them.)
 - Warnings when a limit or the spend limit is reached, usage is not allowed, or the last
   read failed (with the error).
-- `Show used | left` toggle and the `Pace marker` switch (both persisted; apply to the bar
-  too).
+
+**Settings** — the gear in the panel header switches the panel to its settings view (← or
+Escape goes back; Escape on the main view closes the panel). Every setting is persisted:
+
+- **Display**: `Show used | left` and the `Pace marker` switch (both apply to the bar too).
 - **Notify me** — macOS notifications, sent through the ChatGPT page, so they appear as
   ChatGPT's own (its icon and its settings in System Settings → Notifications), always
   titled `LimitBar · Codex`. Each event fires at most once per window cycle:
@@ -151,7 +155,8 @@ bar in the app's own menu style and closes on a click outside, Escape, or a seco
   - less than 25% / less than 10% left — off by default.
 
   They only arrive while a ChatGPT window with the bar is open. If ChatGPT's notifications
-  are off, the panel says so; the bar never asks for permission itself.
+  are off, Settings says so; the bar never asks for permission itself.
+- **About**: bar version, data source and refresh interval, and the diagnostics command.
 
 ## Uninstall
 
@@ -214,12 +219,12 @@ Evaluate in the shell page, e.g.
 |------|---------|
 | `__sprBarSetLimits([{name, usedPercent, resetsAtMs, windowDurationMins?}], meta)` | push limits + `{live, planType, resetCredits, resetCreditsNextExpiresAtMs, resetCreditTitle, limitReached, spendControlReached, usageAllowed, updatedAtMs, error?}` |
 | `__sprBarSetMode('used' \| 'left')` | switch display mode |
-| `__sprBarSetPanel(true \| false)` | open / close the details panel |
+| `__sprBarSetPanel(open, view?)` | open / close the details panel; `view` is `'main'` (default) or `'settings'` |
 | `__sprBarSetPace(true \| false)` | show / hide the pace markers and lines |
 | `__sprBarSetNotify({reset, credit, low25, low10})` | change notification settings |
 | `__sprBarTestNotify()` | send one `LimitBar · test` notification |
 | `__sprBarSetNotifyDryRun(true \| false)` | record would-be notifications in state instead of showing them (tests) |
-| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen, pace, notify: {settings, permission, dryRun, log}}` |
+| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen, panelView, pace, notify: {settings, permission, dryRun, log}}` |
 | `__sprBarRemove()` | full teardown, restores the layout exactly |
 
 ## Development

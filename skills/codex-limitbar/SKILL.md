@@ -112,12 +112,12 @@ Checklist:
 |------|---------|
 | `__sprBarSetLimits([{name, usedPercent, resetsAtMs, windowDurationMins?}], meta)` | push limits + meta `{live, planType, resetCredits, resetCreditsNextExpiresAtMs, resetCreditTitle, limitReached, spendControlReached, usageAllowed, updatedAtMs, error?}` |
 | `__sprBarSetMode('used' \| 'left')` | switch the display mode |
-| `__sprBarSetPanel(true \| false)` | open / close the details panel |
+| `__sprBarSetPanel(open, view?)` | open / close the details panel; `view` is `'main'` (default) or `'settings'` |
 | `__sprBarSetPace(true \| false)` | show / hide the pace markers and lines |
 | `__sprBarSetNotify({reset, credit, low25, low10})` | change notification settings |
 | `__sprBarTestNotify()` | send one `LimitBar · test` notification |
 | `__sprBarSetNotifyDryRun(true \| false)` | record would-be notifications in state instead of showing them (tests) |
-| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen, pace, notify}` |
+| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen, panelView, pace, notify}` |
 | `__sprBarRemove()` | full teardown: removes bar + panel and restores layout padding |
 
 ## Caveats

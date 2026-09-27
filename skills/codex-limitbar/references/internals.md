@@ -134,21 +134,40 @@ fallback; theme changes need no JS.
 
 - The bar is a button (`role=button`, `tabindex=0`, `aria-haspopup=dialog`,
   `aria-controls`, `aria-expanded`); click or Enter/Space toggles
-  `#spr-statusbar-panel` (`role=dialog`). `__sprBarSetPanel(open)` does the same.
+  `#spr-statusbar-panel` (`role=dialog`). `__sprBarSetPanel(open, view?)` does the same.
 - The panel is the **one transient overlay**: user-opened, it may cover app UI while open.
   `position: fixed`, left-aligned with the bar (clamped into the viewport), bottom 6 px
   above the bar, width `min(320px, 100vw − 24px)`, `max-height` down to the window top with
   internal scroll. `z-index: 29` — above page content and the bar (25), below the app's
   z-30 overlay layer and its modals/menus, so an app dialog is never hidden behind it.
-- Closes on an outside `pointerdown` (capture), Escape (focus returns to the bar), a second
-  bar click, window `blur`, a missing layout, `__sprBarRemove()` and any hot-swap.
+- Closes on an outside `pointerdown` (capture), Escape on the main view (focus returns to
+  the bar), a second bar click, window `blur`, a missing layout, `__sprBarRemove()` and any
+  hot-swap — from either view.
+- Two views in the same element (`panelView` in `__sprBarGetState()`): **main**
+  (information only) and **settings**. Opening always starts on main (the hook can pass
+  `'settings'`). The gear (`data-spr-settings`) switches to settings and focuses the active
+  used/left button; ← (`data-spr-back`) or Escape returns to main and focuses the gear.
+  The panel is anchored by its `bottom`, so a taller view grows upward without moving the
+  bottom edge; the view switch resets `scrollTop`. `aria-label` follows the view
+  (`Codex usage limits` / `LimitBar settings`).
 - Content: header (`Codex`, plan badge, `Updated … ago` + dot, refresh button), one block per
   window (title from `windowDurationMins`: 5-hour / Daily / N-day / Weekly), reset credits
   (count, next expiry, title — no "Reset now" action), warnings (`limitReached`,
-  `spendControlReached`, `usageAllowed: false`, `meta.error`), and the `Show used|left`
-  toggle, the `Pace marker` switch and the `Notify me` switches. Relative times re-render
+  `spendControlReached`, `usageAllowed: false`, `meta.error`). Settings view: DISPLAY
+  (`Show used|left`, `Pace marker`), NOTIFY ME (four switches + permission hint), ABOUT
+  (bar version, source, refresh interval, `./start.sh --doctor`). Relative times re-render
   every 10 s while open. All dynamic text goes through
   `esc()`.
+- Motion: open plays `spr-pop` (180 ms, fade + 6 px rise + 0.97 scale from the bar side);
+  close adds `.spr-closing` (`spr-out`, 140 ms) and removes the node on `animationend`
+  (250 ms fallback) — `ensurePanel()` discards a still-closing node if the panel reopens.
+  A view switch freezes the old height, swaps the content, and transitions `height` to the
+  new natural height (220 ms, `.spr-resizing` hides overflow meanwhile) while the new
+  content fades in (`.spr-swap`); the inline height is cleared afterwards. Everything is
+  skipped under `prefers-reduced-motion: reduce`.
+- The `Show used|left` row (`.spr-opt-seg`) has a 2.5 px bottom margin: the 24 px segmented
+  toggle sits in a 26 px row, so without it the gap to the next switch is 4.5 px instead of
+  the 7 px between switches.
 - `font-variant-numeric: tabular-nums` only on numeric rows: Inter's `tnum` also widens
   the hyphen ("5 - hour").
 
@@ -237,7 +256,9 @@ Project the bar's state into a small JSON with `scripts/cdp-eval.mjs`:
   log — reset, both thresholds, credit expiry, no repeat on a second push, nothing with the
   settings off; turn dry-run off after restoring the real limits.
 - Panel: `__sprBarSetPanel(true)` → one `#spr-statusbar-panel`, `aria-expanded="true"`;
-  a synthetic `pointerdown` on `#root` and an Escape `keydown` both close it; the refresh
+  a synthetic `pointerdown` on `#root` and an Escape `keydown` both close it; in settings
+  (`__sprBarSetPanel(true, 'settings')` or a gear click) Escape / ← go back to main with the
+  bottom edge unchanged (measure after the 180 ms open / 220 ms resize animations); the refresh
   button logs `limits live (manual)` and a second click within 10 s logs `throttled`.
 - Screenshot (`--png` / `start.sh --capture`) in both themes — switch only via
   `document.documentElement.dataset.theme` and restore the previous value. The window frame

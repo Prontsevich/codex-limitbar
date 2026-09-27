@@ -9,14 +9,14 @@
 //       meta: {live, planType, resetCredits, resetCreditsNextExpiresAtMs?, resetCreditTitle?,
 //              limitReached?, spendControlReached?, usageAllowed?, updatedAtMs, error?}
 //   - window.__sprBarSetMode('used' | 'left')
-//   - window.__sprBarSetPanel(open) — open/close the details panel
+//   - window.__sprBarSetPanel(open, view?) — open/close the details panel; view 'main' | 'settings'
 //   - window.__sprBarSetPace(bool) — show/hide the pace markers and pace lines
 //   - window.__sprBarSetNotify({reset, credit, low25, low10}) — notification settings
 //   - window.__sprBarTestNotify() — one clearly labelled test notification
 //   - window.__sprBarSetNotifyDryRun(bool) — record would-be notifications instead of
 //       showing them (in-memory dedupe while on; for tests)
 //   - window.__sprBarGetState() -> {version, mode, live, limits, meta, theme, panelOpen,
-//       pace, notify: {settings, permission, dryRun, log}}
+//       panelView, pace, notify: {settings, permission, dryRun, log}}
 //   - window.__sprBarRemove() -> full teardown, restores the layout exactly
 //   - window.__sprBarRefreshBinding(payload) — CDP binding added by the helper (the
 //       panel's refresh button); absent for --once clients, then the button is hidden.
@@ -30,7 +30,7 @@
 // ChatGPT's own (its icon, its Notification settings). They are always prefixed
 // "LimitBar", fire at most once per window cycle, and permission is never requested.
 (() => {
-  const BAR_VERSION = 26;
+  const BAR_VERSION = 31;
   const ID = 'spr-statusbar';
   const PANEL_ID = ID + '-panel';
   const STYLE_ID = ID + '-style';
@@ -197,6 +197,8 @@
   };
 
   const CHEVRON = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 6.5 5 3.5l3 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const GEAR = '<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M12.9 8.6L14.3 9.5L13.5 11.4L11.9 11.0L11.0 11.9L11.4 13.5L9.5 14.3L8.6 12.9L7.4 12.9L6.5 14.3L4.6 13.5L5.0 11.9L4.1 11.0L2.5 11.4L1.7 9.5L3.1 8.6L3.1 7.4L1.7 6.5L2.5 4.6L4.1 5.0L5.0 4.1L4.6 2.5L6.5 1.7L7.4 3.1L8.6 3.1L9.5 1.7L11.4 2.5L11.0 4.1L11.9 5.0L13.5 4.6L14.3 6.5L12.9 7.4Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+  const BACK = '<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const REFRESH = '<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   const P = '#' + PANEL_ID;
@@ -274,9 +276,14 @@
     '  border-radius:var(--popover-radius, 15px);',
     '  box-shadow:var(--menu-box-shadow, 0 0 0 .5px rgba(128,128,128,.2), 0 8px 16px -4px rgba(0,0,0,.3));',
     '  user-select:none;-webkit-user-select:none;cursor:default;',
-    '  animation:spr-pop .12s ease-out;',
+    '  transform-origin:24px 100%;animation:spr-pop .18s cubic-bezier(.2,.8,.2,1);',
     '}',
-    '@keyframes spr-pop{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}',
+    P + '.spr-closing{animation:spr-out .14s ease-in forwards;pointer-events:none}',
+    P + '.spr-resizing{overflow:hidden;transition:height .22s cubic-bezier(.2,.8,.2,1)}',
+    P + '.spr-swap > *{animation:spr-fade .2s ease-out}',
+    '@keyframes spr-pop{from{opacity:0;transform:translateY(6px) scale(.97)}to{opacity:1;transform:none}}',
+    '@keyframes spr-out{from{opacity:1;transform:none}to{opacity:0;transform:translateY(4px) scale(.98)}}',
+    '@keyframes spr-fade{from{opacity:0}to{opacity:1}}',
     '@keyframes spr-spin{to{transform:rotate(360deg)}}',
     P + ' .spr-sec{padding:8px 14px}',
     P + ' .spr-hr{height:1px;margin:4px 14px;background:var(--menu-separator-background-color, var(--app-color-border, rgba(128,128,128,.2)))}',
@@ -284,8 +291,10 @@
     P + ' .spr-title{font-weight:600;color:var(--spr-fg)}',
     P + ' .spr-badge{font-size:11px;font-weight:500;line-height:18px;padding:0 7px;border-radius:999px;color:var(--spr-fg2);background:var(--spr-hover);text-transform:capitalize}',
     P + ' .spr-sub{display:flex;align-items:center;gap:6px;margin-top:2px;font-size:12px;color:var(--spr-fg3)}',
-    P + ' .spr-icon{all:unset;box-sizing:border-box;margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:var(--radius-md, 10px);color:var(--spr-fg2);cursor:pointer}',
+    P + ' .spr-actions{margin-left:auto;display:inline-flex;align-items:center;gap:2px}',
+    P + ' .spr-icon{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:var(--radius-md, 10px);color:var(--spr-fg2);cursor:pointer}',
     P + ' .spr-icon:hover{background:var(--spr-hover);color:var(--spr-fg)}',
+    P + ' .spr-icon.spr-back{margin-left:-10px}',   // chevron flush with the content edge (after all:unset)
     P + ' .spr-icon:focus-visible{box-shadow:inset 0 0 0 1px var(--spr-fg3)}',
     P + ' .spr-icon[aria-busy="true"] svg{animation:spr-spin .8s linear infinite}',
     P + ' .spr-icon[aria-busy="true"]{cursor:progress}',
@@ -304,15 +313,14 @@
     P + ' .spr-warn{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--spr-low)}',
     P + ' .spr-warn + .spr-warn{margin-top:4px}',
     P + ' .spr-warn.spr-crit{color:var(--spr-crit)}',
-    P + ' .spr-foot{display:flex;align-items:center;justify-content:space-between;gap:12px}',
     // used/left toggle mirrors the app's own mode toggle (Chat / Work) tokens.
     P + ' .spr-toggle{display:inline-flex;padding:2px;gap:2px;border-radius:999px;background:var(--color-background-mode-toggle-track, var(--spr-track));flex:none}',
     P + ' .spr-toggle button{all:unset;cursor:pointer;font-size:12px;line-height:20px;height:20px;padding:0 10px;border-radius:999px;color:var(--color-text-mode-toggle-inactive, var(--spr-fg3));box-sizing:border-box}',
     P + ' .spr-toggle button.on{background:var(--color-background-mode-toggle-selected, var(--app-color-background-control, transparent));color:var(--color-text-mode-toggle-primary, var(--spr-fg));box-shadow:0 0 0 .5px var(--color-border-mode-toggle-selected, transparent)}',
     P + ' .spr-toggle button:focus-visible{box-shadow:inset 0 0 0 1px var(--spr-fg3)}',
-    P + ' .spr-source{margin-top:8px;font-size:11px;color:var(--spr-fg3)}',
     P + ' .spr-h{margin-bottom:4px;color:var(--spr-fg3);font-size:var(--font-small-caps-md-size, 11px);font-weight:var(--font-small-caps-md-weight, 600);letter-spacing:var(--font-small-caps-md-tracking, .65px);text-transform:uppercase}',
     P + ' .spr-opt{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:26px;font-size:12px;color:var(--spr-fg2)}',
+    P + ' .spr-opt-seg{margin-bottom:2.5px}',   // 24 px toggle in a 26 px row: evens its gap to the next switch with the 7 px between switches
     // Switches use the app's own switch tokens (track, thumb, checked accent).
     P + ' .spr-sw{all:unset;box-sizing:border-box;position:relative;flex:none;width:var(--switch-track-width, 32px);height:var(--switch-track-height, 19px);border-radius:999px;background:var(--switch-track-color, var(--spr-track));cursor:pointer;transition:background-color .15s ease}',
     P + ' .spr-sw::after{content:"";position:absolute;top:var(--switch-thumb-offset, 3px);left:var(--switch-thumb-offset, 3px);width:var(--switch-thumb-size, 13px);height:var(--switch-thumb-size, 13px);border-radius:50%;background:var(--switch-thumb-color, #fff);box-shadow:var(--switch-thumb-shadow, 0 1px 2px rgba(0,0,0,.2));transition:transform .15s ease}',
@@ -320,7 +328,9 @@
     P + ' .spr-sw[aria-checked="true"]::after{transform:translateX(calc(var(--switch-track-width, 32px) - var(--switch-thumb-size, 13px) - 2 * var(--switch-thumb-offset, 3px)))}',
     P + ' .spr-sw:focus-visible{box-shadow:0 0 0 1.5px var(--spr-fg3)}',
     P + ' .spr-hint{margin-top:4px;font-size:11px;color:var(--spr-fg3)}',
-    '@media (prefers-reduced-motion:reduce){' + P + '{animation:none}' + P + ' .spr-icon[aria-busy="true"] svg{animation:none}#' + ID + ' .spr-end svg,' + P + ' .spr-sw,' + P + ' .spr-sw::after{transition:none}}'
+    P + ' .spr-about{font-size:12px;line-height:1.6;color:var(--spr-fg3)}',
+    P + ' .spr-about code{font-family:var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);font-size:11px;color:var(--spr-fg2);font-variant-ligatures:none}',
+    '@media (prefers-reduced-motion:reduce){' + P + ',' + P + '.spr-closing,' + P + '.spr-swap > *{animation:none}' + P + '.spr-resizing{transition:none}' + P + ' .spr-icon[aria-busy="true"] svg{animation:none}#' + ID + ' .spr-end svg,' + P + ' .spr-sw,' + P + ' .spr-sw::after{transition:none}}'
   ].join('\n');
 
   // ---- layout discovery ---------------------------------------------------------------
@@ -357,6 +367,7 @@
   let layouts = [];
   let card = null;
   let panelOpen = false;
+  let panelView = 'main';          // 'main' (information) | 'settings'
   let refreshing = false;
   let refreshTimer = 0;
   let panelTick = 0;
@@ -383,9 +394,11 @@
     if ((panel && panel.contains(t)) || (bar && bar.contains(t))) return;
     setPanel(false);
   };
+  // Escape steps back one level: Settings → main view → closed.
   const onDocKey = ev => {
     if (ev.key !== 'Escape') return;
     ev.stopPropagation();
+    if (panelView === 'settings') { setView('main', '[data-spr-settings]'); return; }
     setPanel(false);
     const bar = document.getElementById(ID); if (bar) bar.focus();
   };
@@ -402,6 +415,8 @@
       return;
     }
     if (el.closest('[data-spr-refresh]')) { requestRefresh(); return; }
+    if (el.closest('[data-spr-settings]')) { setView('settings', '[data-spr-mode].on'); return; }
+    if (el.closest('[data-spr-back]')) { setView('main', '[data-spr-settings]'); return; }
     const sw = el.closest('[data-spr-switch]');
     if (sw) {
       const key = sw.getAttribute('data-spr-switch');
@@ -428,10 +443,47 @@
     renderPanel();
   };
 
-  function setPanel(open) {
+  // Switches the open panel between its views; the panel is anchored by its bottom
+  // edge, so a taller or shorter view grows/shrinks upward without a jump.
+  const reducedMotion = () => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (err) { return false; } };
+
+  // Height tween between views: freeze the old height, swap the content, then
+  // transition to the new natural height (bottom-anchored, so the top edge moves).
+  let resizeTimer = 0;
+  const animateSwap = (p, from) => {
+    clearTimeout(resizeTimer);
+    p.classList.remove('spr-resizing', 'spr-swap');
+    p.style.height = '';
+    const to = p.offsetHeight;
+    if (reducedMotion() || !from || from === to) return;
+    p.style.height = from + 'px';
+    void p.offsetHeight;                       // commit the start height before transitioning
+    p.classList.add('spr-resizing', 'spr-swap');
+    p.style.height = to + 'px';
+    resizeTimer = setTimeout(() => { p.classList.remove('spr-resizing', 'spr-swap'); p.style.height = ''; }, 260);
+  };
+
+  function setView(view, focusSel) {
+    if (!panelOpen) return;
+    const next = view === 'settings' ? 'settings' : 'main';
+    const cur = document.getElementById(PANEL_ID);
+    const from = cur ? cur.offsetHeight : 0;
+    const changed = next !== panelView;
+    panelView = next;
+    renderPanel();
+    const p = document.getElementById(PANEL_ID);
+    if (p && changed) animateSwap(p, from);
+    const target = p && focusSel ? p.querySelector(focusSel) : null;
+    if (target) target.focus();
+    if (p) p.scrollTop = 0;
+  }
+
+  function setPanel(open, view) {
     open = !!open && !!document.getElementById(ID);
+    if (open && panelOpen) { setView(view); return; }
     if (open === panelOpen) return;
     panelOpen = open;
+    panelView = open && view === 'settings' ? 'settings' : 'main';   // opening starts on the main view
     const bar = document.getElementById(ID);
     if (bar) bar.setAttribute('aria-expanded', String(open));
     if (open) {
@@ -445,13 +497,24 @@
       document.removeEventListener('keydown', onDocKey, true);
       removeEventListener('blur', onBlur);
       clearInterval(panelTick); panelTick = 0;
-      const p = document.getElementById(PANEL_ID); if (p) p.remove();
+      const p = document.getElementById(PANEL_ID);
+      if (p) {
+        clearTimeout(resizeTimer);
+        if (reducedMotion()) p.remove();
+        else {
+          p.classList.add('spr-closing');      // ensurePanel drops it if the panel reopens meanwhile
+          const gone = () => p.remove();
+          p.addEventListener('animationend', gone, { once: true });
+          setTimeout(gone, 250);               // no animationend (hidden tab, reduced motion race)
+        }
+      }
       lastPanelHtml = '';
     }
   }
 
   const ensurePanel = () => {
     let p = document.getElementById(PANEL_ID);
+    if (p && p.classList.contains('spr-closing')) { p.remove(); p = null; }   // reopened mid-close
     if (!p) {
       p = document.createElement('div');
       p.id = PANEL_ID;
@@ -564,10 +627,12 @@
     const data = hasData();
     let h = '<div class="spr-sec"><div class="spr-head"><span class="spr-title">Codex</span>';
     if (m.planType) h += '<span class="spr-badge">' + esc(m.planType) + '</span>';
+    h += '<span class="spr-actions">';
     if (canRefresh()) {
       h += '<button class="spr-icon" type="button" data-spr-refresh aria-label="Refresh limits"'
         + (refreshing ? ' aria-busy="true"' : '') + '>' + REFRESH + '</button>';
     }
+    h += '<button class="spr-icon" type="button" data-spr-settings aria-label="LimitBar settings">' + GEAR + '</button></span>';
     h += '</div><div class="spr-sub">';
     if (m.updatedAtMs) {
       h += statusDot() + '<span>'
@@ -614,7 +679,17 @@
         + '</div>';
     }
 
-    h += '<div class="spr-hr"></div><div class="spr-sec"><div class="spr-foot"><span class="spr-muted">Show</span>'
+    return h;
+  };
+
+  // Settings view: display options, notification switches, about.
+  const settingsHTML = () => {
+    let h = '<div class="spr-sec"><div class="spr-head">'
+      + '<button class="spr-icon spr-back" type="button" data-spr-back aria-label="Back">' + BACK + '</button>'
+      + '<span class="spr-title">Settings</span></div></div>';
+
+    h += '<div class="spr-hr"></div><div class="spr-sec"><div class="spr-h">Display</div>'
+      + '<div class="spr-opt spr-opt-seg"><span>Show</span>'
       + '<span class="spr-toggle" role="group" aria-label="Show used or left">'
       + '<button type="button" data-spr-mode="used" class="' + (st.mode === 'used' ? 'on' : '') + '" aria-pressed="' + (st.mode === 'used') + '">used</button>'
       + '<button type="button" data-spr-mode="left" class="' + (st.mode === 'left' ? 'on' : '') + '" aria-pressed="' + (st.mode === 'left') + '">left</button>'
@@ -627,19 +702,30 @@
       + switchHTML('notify:low25', 'Less than 25% left', notifySettings.low25)
       + switchHTML('notify:low10', 'Less than 10% left', notifySettings.low10);
     if (!canNotify()) h += '<div class="spr-hint">Enable notifications for ChatGPT in System Settings</div>';
-    h += '<div class="spr-source">Local app-server · refreshes every 5 min</div></div>';
+    h += '</div>';
+
+    h += '<div class="spr-hr"></div><div class="spr-sec"><div class="spr-h">About</div><div class="spr-about">'
+      + '<div>LimitBar v' + BAR_VERSION + '</div>'
+      + '<div>Source: ChatGPT app-server</div>'
+      + '<div>Refreshes every 5 min</div>'
+      + '<div>Diagnostics: <code>./start.sh --doctor</code></div>'
+      + '</div></div>';
     return h;
   };
 
   function renderPanel() {
     if (!panelOpen) return;
     const p = ensurePanel();
-    const html = panelHTML();
+    const html = panelView === 'settings' ? settingsHTML() : panelHTML();
+    const label = panelView === 'settings' ? 'LimitBar settings' : 'Codex usage limits';
+    if (p.getAttribute('aria-label') !== label) p.setAttribute('aria-label', label);
     if (html !== lastPanelHtml) {
       // Keep keyboard focus on the same control across a re-render.
       const a = document.activeElement;
       const sel = a && p.contains(a)
         ? (a.hasAttribute('data-spr-refresh') ? '[data-spr-refresh]'
+          : a.hasAttribute('data-spr-settings') ? '[data-spr-settings]'
+          : a.hasAttribute('data-spr-back') ? '[data-spr-back]'
           : a.hasAttribute('data-spr-mode') ? '[data-spr-mode="' + a.getAttribute('data-spr-mode') + '"]'
           : a.hasAttribute('data-spr-switch') ? '[data-spr-switch="' + a.getAttribute('data-spr-switch') + '"]' : null)
         : null;
@@ -813,7 +899,7 @@
     } catch (err) { return false; }
   };
   window.__sprBarSetMode = m => { st.mode = m === 'left' ? 'left' : 'used'; writeMode(st.mode); render(); };
-  window.__sprBarSetPanel = open => { setPanel(open); return panelOpen; };
+  window.__sprBarSetPanel = (open, view) => { setPanel(open, view); return panelOpen; };
   window.__sprBarRefreshDone = refreshDone;
   window.__sprBarSetPace = on => { setPace(on); return pace; };
   window.__sprBarSetNotify = partial => { setNotify(partial); return Object.assign({}, notifySettings); };
@@ -828,7 +914,7 @@
   };
   window.__sprBarGetState = () => ({
     version: BAR_VERSION, mode: st.mode, live: st.live, meta: st.meta, limits: st.limits,
-    theme: document.documentElement.dataset.theme || null, panelOpen, pace,
+    theme: document.documentElement.dataset.theme || null, panelOpen, panelView: panelOpen ? panelView : 'main', pace,
     notify: { settings: Object.assign({}, notifySettings), permission: notifyPermission(), dryRun: notifyDryRun, log: dryLog.slice() }
   });
   window.__sprBarRemove = remove;

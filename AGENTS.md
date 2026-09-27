@@ -60,7 +60,7 @@ DevTools Protocol — no bundle modification. Two parts:
 - **Notifications** (Web Notification API in the page, shown as ChatGPT's own):
   always titled `LimitBar …`, each event at most once per window cycle (dedupe
   keys in `spr-statusbar-notified`, reset times rounded to 10 min), and **never
-  call `Notification.requestPermission()`** — without permission the panel shows
+  call `Notification.requestPermission()`** — without permission the Settings view shows
   a hint instead. Test event logic with `__sprBarSetNotifyDryRun(true)`; a live
   test shows at most one `__sprBarTestNotify()` banner.
 - **Never weaken the identity check** (`lib/cdp.mjs` `verifyIdentity`, mirrored
