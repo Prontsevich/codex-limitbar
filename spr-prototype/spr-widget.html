@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LimitBar</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; color: var(--color-text-primary, CanvasText); background: var(--color-background-primary, Canvas); }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; }
+    main { display: flow-root; max-width: 540px; margin: auto; }
+    header, .spr-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    h1 { font-size: 20px; margin: 0; letter-spacing: -.5px; }
+    h2 { font-size: 14px; margin: 0; }
+    button { font: inherit; cursor: pointer; border: 1px solid var(--color-border-primary, ButtonBorder); background: var(--color-background-secondary, ButtonFace); color: var(--color-text-primary, ButtonText); border-radius: 8px; padding: 6px 12px; }
+    button:disabled { opacity: .5; cursor: wait; }
+    button:focus-visible { outline: 2px solid Highlight; outline-offset: 3px; }
+    .spr-muted { color: var(--color-text-secondary, GrayText); font-size: 12px; }
+    #spr-meta { margin: 6px 0 24px; }
+    article { margin-bottom: 22px; }
+    progress { width: 100%; height: 9px; margin: 10px 0 6px; accent-color: var(--color-text-primary, AccentColor); }
+    #spr-credits { padding: 16px 0; border-top: 1px solid var(--color-border-primary, ButtonBorder); }
+    #spr-error { padding: 12px; border: 1px solid var(--color-border-primary, ButtonBorder); border-radius: 8px; }
+    footer { margin-top: 24px; display: flex; gap: 8px; flex-wrap: wrap; }
+    details { margin-top: 24px; font-size: 12px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+<main id="spr-limitbar">
+  <header><h1>LimitBar</h1><button id="spr-refresh" disabled>Refresh</button></header>
+  <p class="spr-muted" id="spr-meta">Connecting…</p>
+  <p id="spr-error" role="alert" hidden></p>
+  <section id="spr-windows" aria-label="Usage windows" aria-live="polite"></section>
+  <section id="spr-credits" hidden></section>
+  <footer><button id="spr-mode">Show left</button><button id="spr-pip" hidden>Compact view</button></footer>
+  <details><summary>Prototype diagnostics</summary><pre id="spr-diagnostics"></pre></details>
+</main>
+<script>
+(() => {
+  const el = id => document.getElementById('spr-' + id);
+  let snapshot = null, showLeft = false, busy = false, initialized = false, disposed = false;
+  let reportedHeight = null;
+  let hostContext = {}, lastError = null, nextId = 0;
+  const pending = new Map();
+  const diagnostics = () => {
+    el('diagnostics').textContent = JSON.stringify({
+      version: '0.1.0', bridge: initialized ? 'connected' : 'connecting',
+      displayMode: hostContext.displayMode || window.openai?.displayMode || null,
+      theme: hostContext.theme || window.openai?.theme || null,
+      live: snapshot?.meta?.live === true, updatedAtMs: snapshot?.meta?.updatedAtMs || null,
+      error: lastError,
+    }, null, 2);
+  };
+  function duration(ms) {
+    if (!Number.isFinite(ms)) return 'unknown';
+    const mins = Math.max(0, Math.ceil(ms / 60000));
+    if (mins >= 1440) return Math.floor(mins / 1440) + 'd ' + Math.floor(mins % 1440 / 60) + 'h';
+    return Math.floor(mins / 60) + 'h ' + mins % 60 + 'm';
+  }
+  function text(tag, value, className) {
+    const node = document.createElement(tag); node.textContent = value;
+    if (className) node.className = className;
+    return node;
+  }
+  function render() {
+    if (disposed) return;
+    const meta = snapshot?.meta || {};
+    const stale = Boolean(lastError) || meta.live !== true || !meta.updatedAtMs || Date.now() - meta.updatedAtMs > 15 * 60000;
+    const age = meta.updatedAtMs ? Math.max(0, Math.floor((Date.now() - meta.updatedAtMs) / 60000)) : null;
+    el('meta').textContent = snapshot
+      ? [meta.planType, stale ? 'Stale' : 'Live', age === null ? null : age < 1 ? 'Updated just now' : 'Updated ' + age + 'm ago'].filter(Boolean).join(' · ')
+      : initialized ? 'Waiting for limits…' : 'Connecting…';
+    el('error').hidden = !lastError;
+    el('error').textContent = lastError || '';
+    el('windows').replaceChildren();
+    for (const limit of snapshot?.limits || []) {
+      const used = Math.min(100, Math.max(0, Number(limit.usedPercent) || 0));
+      const percent = showLeft ? 100 - used : used;
+      const card = document.createElement('article');
+      const row = document.createElement('div'); row.className = 'spr-row';
+      row.append(text('h2', limit.name), text('strong', Math.round(percent) + '% ' + (showLeft ? 'left' : 'used')));
+      const bar = document.createElement('progress'); bar.max = 100; bar.value = percent;
+      bar.setAttribute('aria-label', limit.name + ' ' + (showLeft ? 'remaining' : 'used'));
+      card.append(row, bar, text('div', 'Resets in ' + duration(limit.resetsAtMs == null ? NaN : limit.resetsAtMs - Date.now()), 'spr-muted'));
+      if (limit.windowDurationMins && limit.resetsAtMs) {
+        const pace = Math.min(100, Math.max(0, 100 * (1 - (limit.resetsAtMs - Date.now()) / (limit.windowDurationMins * 60000))));
+        if (pace >= 2) card.append(text('div', Math.abs(used - pace) < 2 ? 'On pace' : Math.round(Math.abs(used - pace)) + '% ' + (used > pace ? 'over' : 'under') + ' pace', 'spr-muted'));
+      }
+      el('windows').append(card);
+    }
+    el('credits').hidden = meta.resetCredits == null;
+    el('credits').textContent = 'Reset credits: ' + (meta.resetCredits ?? 'unknown') +
+      (meta.resetCreditsNextExpiresAtMs ? ' · Next expires in ' + duration(meta.resetCreditsNextExpiresAtMs - Date.now()) : '');
+    el('mode').textContent = showLeft ? 'Show used' : 'Show left';
+    el('pip').hidden = typeof window.openai?.requestDisplayMode !== 'function';
+    diagnostics();
+    reportSize();
+  }
+  function receive(result) {
+    if (result?.structuredContent) {
+      snapshot = result.structuredContent;
+      lastError = result.isError ? snapshot.meta?.error || 'Limits unavailable.' : null;
+      render();
+    }
+  }
+  function notify(method, params) {
+    if (!disposed) window.parent.postMessage({ jsonrpc: '2.0', method, params }, '*');
+  }
+  function reportSize() {
+    if (!initialized || disposed) return;
+    // Measure content, not the current iframe viewport, so the host can shrink too.
+    const height = Math.ceil(el('limitbar').getBoundingClientRect().height + 40);
+    if (height === reportedHeight) return;
+    reportedHeight = height;
+    notify('ui/notifications/size-changed', { height });
+  }
+  const sizeObserver = new ResizeObserver(reportSize);
+  sizeObserver.observe(el('limitbar'));
+  document.querySelector('details').addEventListener('toggle', reportSize);
+  function request(method, params) {
+    if (disposed) return Promise.reject(new Error('The panel was closed.'));
+    return new Promise((resolve, reject) => {
+      const id = ++nextId;
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error('The host did not respond to ' + method + '.')); }, 20000);
+      pending.set(id, { resolve, reject, timer });
+      window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+    });
+  }
+  function applyContext(context) {
+    hostContext = { ...hostContext, ...context };
+    if (context?.theme === 'dark' || context?.theme === 'light') document.documentElement.style.colorScheme = context.theme;
+    render();
+  }
+  window.addEventListener('message', event => {
+    if (event.source !== window.parent || event.data?.jsonrpc !== '2.0') return;
+    const message = event.data;
+    // Host requests are distinct from responses; request ids can overlap ours.
+    if (message.method) {
+      if (message.method === 'ui/notifications/tool-result') receive(message.params);
+      if (message.method === 'ui/notifications/host-context-changed') applyContext(message.params || {});
+      if (message.id !== undefined) {
+        window.parent.postMessage({ jsonrpc: '2.0', id: message.id,
+          ...(message.method === 'ui/resource-teardown' ? { result: {} } : { error: { code: -32601, message: 'Method not found' } }),
+        }, '*');
+        if (message.method === 'ui/resource-teardown') {
+          disposed = true; initialized = false;
+          clearInterval(pollTimer); clearInterval(renderTimer); sizeObserver.disconnect();
+          for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new Error('The panel was closed.')); }
+          pending.clear();
+        }
+      }
+      return;
+    }
+    const entry = pending.get(message.id);
+    if (!entry) return;
+    pending.delete(message.id); clearTimeout(entry.timer);
+    if (message.error) entry.reject(new Error(message.error.message || 'Host request failed.'));
+    else entry.resolve(message.result);
+  });
+  async function refresh() {
+    if (!initialized || busy || document.hidden) return;
+    busy = true; el('refresh').disabled = true;
+    try { receive(await request('tools/call', { name: 'spr_read_limits', arguments: {} })); }
+    catch (error) { lastError = error.message; render(); }
+    finally { busy = false; if (!disposed) el('refresh').disabled = false; }
+  }
+  el('refresh').addEventListener('click', refresh);
+  el('mode').addEventListener('click', () => { showLeft = !showLeft; render(); });
+  el('pip').addEventListener('click', async () => {
+    try { await window.openai.requestDisplayMode({ mode: 'pip' }); }
+    catch { lastError = 'Compact view is unavailable in this host.'; render(); }
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  const pollTimer = setInterval(refresh, 5 * 60000);
+  const renderTimer = setInterval(render, 60000);
+  (async () => {
+    try {
+      const host = await request('ui/initialize', {
+        appInfo: { name: 'spr-limitbar', version: '0.1.0' }, appCapabilities: {}, protocolVersion: '2026-01-26',
+      });
+      if (disposed) return;
+      initialized = true;
+      notify('ui/notifications/initialized', {});
+      applyContext(host.hostContext || {});
+      reportSize();
+      await refresh();
+    } catch (error) { lastError = error.message; render(); }
+  })();
+  render();
+})();
+</script>
+</body>
+</html>
