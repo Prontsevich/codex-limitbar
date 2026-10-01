@@ -5,8 +5,8 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { findCodex, rpcFetch, parseLimits, killChildren } from '../lib/limits.mjs';
 
-export const VERSION = '0.1.1';
-export const UI_URI = 'ui://spr-limitbar/v3.html';
+export const VERSION = '0.1.2';
+export const UI_URI = 'ui://spr-limitbar/v4.html';
 const MIME = 'text/html;profile=mcp-app';
 const schema = { type: 'object', properties: {}, additionalProperties: false };
 const annotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true };
@@ -93,7 +93,10 @@ export function createHandler({ readLimits, now = Date.now } = {}) {
         const html = await readFile(new URL('./spr-widget.html', import.meta.url), 'utf8');
         return reply({ contents: [{
           uri: UI_URI, mimeType: MIME, text: html,
-          _meta: { ui: { prefersBorder: true, csp: { connectDomains: [], resourceDomains: [] } } },
+          _meta: {
+            ui: { prefersBorder: true, csp: { connectDomains: [], resourceDomains: [] } },
+            'openai/ui': { availableDisplayModes: ['inline', 'fullscreen', 'pip'] },
+          },
         }] });
       }
       case 'tools/call': {

@@ -5,17 +5,18 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>LimitBar</title>
   <style>
-    :root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; color: var(--color-text-primary, CanvasText); background: var(--color-background-primary, Canvas); }
+    :root { color-scheme: light dark; font: 14px/1.5 var(--font-sans, system-ui, sans-serif); color: var(--color-text-primary, CanvasText); background: var(--color-background-primary, Canvas); }
     * { box-sizing: border-box; }
     body { margin: 0; padding: 20px; }
     main { display: flow-root; max-width: 540px; margin: auto; }
     header, .spr-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    header { flex-wrap: wrap; }
     h1 { font-size: 20px; margin: 0; letter-spacing: -.5px; }
     h2 { font-size: 14px; margin: 0; }
     button { font: inherit; cursor: pointer; border: 1px solid var(--color-border-primary, ButtonBorder); background: var(--color-background-secondary, ButtonFace); color: var(--color-text-primary, ButtonText); border-radius: 8px; padding: 6px 12px; }
     button:disabled { opacity: .5; cursor: wait; }
     button:focus-visible { outline: 2px solid Highlight; outline-offset: 3px; }
-    .spr-muted { color: var(--color-text-secondary, GrayText); font-size: 12px; }
+    .spr-muted { color: var(--color-text-secondary, CanvasText); font-size: 12px; }
     #spr-meta { margin: 6px 0 24px; }
     article { margin-bottom: 22px; }
     progress { width: 100%; height: 9px; margin: 10px 0 6px; accent-color: var(--color-text-primary, AccentColor); }
@@ -24,6 +25,12 @@
     footer { margin-top: 24px; display: flex; gap: 8px; flex-wrap: wrap; }
     details { margin-top: 24px; font-size: 12px; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    :root[data-spr-display-mode="pip"] body { padding: 12px; }
+    :root[data-spr-display-mode="pip"] h1 { font-size: 16px; }
+    :root[data-spr-display-mode="pip"] #spr-meta { margin-bottom: 12px; }
+    :root[data-spr-display-mode="pip"] article { margin-bottom: 12px; }
+    :root[data-spr-display-mode="pip"] footer { margin-top: 12px; }
+    :root[data-spr-display-mode="pip"] details { display: none; }
   </style>
 </head>
 <body>
@@ -34,6 +41,7 @@
   <section id="spr-windows" aria-label="Usage windows" aria-live="polite"></section>
   <section id="spr-credits" hidden></section>
   <footer><button id="spr-mode">Show left</button><button id="spr-pip" hidden>Compact view</button></footer>
+  <p class="spr-muted" id="spr-view-status" role="status" hidden></p>
   <details><summary>Prototype diagnostics</summary><pre id="spr-diagnostics"></pre></details>
 </main>
 <script>
@@ -41,13 +49,17 @@
   const el = id => document.getElementById('spr-' + id);
   let snapshot = null, showLeft = false, busy = false, initialized = false, disposed = false;
   let reportedHeight = null;
-  let hostContext = {}, lastError = null, nextId = 0;
+  let hostContext = {}, lastError = null, viewNotice = null, changingMode = false, nextId = 0;
+  const styleKeys = new Set();
+  const displayModes = ['inline', 'fullscreen', 'pip'];
   const pending = new Map();
   const diagnostics = () => {
     el('diagnostics').textContent = JSON.stringify({
-      version: '0.1.0', bridge: initialized ? 'connected' : 'connecting',
+      version: '0.1.2', bridge: initialized ? 'connected' : 'connecting',
       displayMode: hostContext.displayMode || window.openai?.displayMode || null,
       theme: hostContext.theme || window.openai?.theme || null,
+      availableDisplayModes: hostContext.availableDisplayModes || null,
+      hostStyleCount: styleKeys.size, viewNotice,
       live: snapshot?.meta?.live === true, updatedAtMs: snapshot?.meta?.updatedAtMs || null,
       error: lastError,
     }, null, 2);
@@ -93,7 +105,16 @@
     el('credits').textContent = 'Reset credits: ' + (meta.resetCredits ?? 'unknown') +
       (meta.resetCreditsNextExpiresAtMs ? ' · Next expires in ' + duration(meta.resetCreditsNextExpiresAtMs - Date.now()) : '');
     el('mode').textContent = showLeft ? 'Show used' : 'Show left';
-    el('pip').hidden = typeof window.openai?.requestDisplayMode !== 'function';
+    const mode = hostContext.displayMode || window.openai?.displayMode;
+    const supported = hostContext.availableDisplayModes;
+    const target = mode === 'pip' ? 'fullscreen' : 'pip';
+    el('pip').hidden = !initialized || (Array.isArray(supported) && !supported.includes(target));
+    el('pip').disabled = changingMode;
+    el('pip').textContent = mode === 'pip' ? 'Full view' : 'Compact view';
+    const notice = viewNotice || (initialized && mode !== 'pip' && Array.isArray(supported) && !supported.includes('pip')
+      ? 'Compact view is not offered by this host.' : null);
+    el('view-status').hidden = !notice;
+    el('view-status').textContent = notice || '';
     diagnostics();
     reportSize();
   }
@@ -110,7 +131,7 @@
   function reportSize() {
     if (!initialized || disposed) return;
     // Measure content, not the current iframe viewport, so the host can shrink too.
-    const height = Math.ceil(el('limitbar').getBoundingClientRect().height + 40);
+    const height = Math.ceil(el('limitbar').getBoundingClientRect().height + (hostContext.displayMode === 'pip' ? 24 : 40));
     if (height === reportedHeight) return;
     reportedHeight = height;
     notify('ui/notifications/size-changed', { height });
@@ -130,6 +151,18 @@
   function applyContext(context) {
     hostContext = { ...hostContext, ...context };
     if (context?.theme === 'dark' || context?.theme === 'light') document.documentElement.style.colorScheme = context.theme;
+    // Context notifications are partial; style-variable updates replace the map.
+    if (context?.styles && Object.hasOwn(context.styles, 'variables')) {
+      for (const key of styleKeys) document.documentElement.style.removeProperty(key);
+      styleKeys.clear();
+      for (const [key, value] of Object.entries(context.styles.variables || {})) {
+        if (/^--[a-z][a-z0-9-]*$/.test(key) && typeof value === 'string') {
+          document.documentElement.style.setProperty(key, value);
+          styleKeys.add(key);
+        }
+      }
+    }
+    document.documentElement.setAttribute('data-spr-display-mode', hostContext.displayMode || 'inline');
     render();
   }
   window.addEventListener('message', event => {
@@ -168,8 +201,18 @@
   el('refresh').addEventListener('click', refresh);
   el('mode').addEventListener('click', () => { showLeft = !showLeft; render(); });
   el('pip').addEventListener('click', async () => {
-    try { await window.openai.requestDisplayMode({ mode: 'pip' }); }
-    catch { lastError = 'Compact view is unavailable in this host.'; render(); }
+    if (!initialized || disposed || changingMode) return;
+    const target = (hostContext.displayMode || window.openai?.displayMode) === 'pip' ? 'fullscreen' : 'pip';
+    changingMode = true; viewNotice = null; render();
+    try {
+      const response = await request('ui/request-display-mode', { mode: target });
+      if (disposed) return;
+      if (!displayModes.includes(response?.mode)) throw new Error('Invalid display mode');
+      viewNotice = response.mode === target ? null : 'The host kept ' + response.mode + '; the requested view is unavailable here.';
+      applyContext({ displayMode: response.mode });
+    } catch {
+      if (!disposed) viewNotice = 'The host could not switch views. Current limits remain available.';
+    } finally { changingMode = false; if (!disposed) render(); }
   });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   const pollTimer = setInterval(refresh, 5 * 60000);
@@ -177,7 +220,7 @@
   (async () => {
     try {
       const host = await request('ui/initialize', {
-        appInfo: { name: 'spr-limitbar', version: '0.1.0' }, appCapabilities: {}, protocolVersion: '2026-01-26',
+        appInfo: { name: 'spr-limitbar', version: '0.1.2' }, appCapabilities: { availableDisplayModes: displayModes }, protocolVersion: '2026-01-26',
       });
       if (disposed) return;
       initialized = true;

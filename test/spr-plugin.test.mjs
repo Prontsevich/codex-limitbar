@@ -54,6 +54,7 @@ test('MCP discovery advertises both entrypoints and serves a self-contained UI r
   assert.equal(result.tools.find(tool => tool.name === 'spr_read_limits')._meta.ui.resourceUri, undefined);
   const resource = await handle(call('resources/read', { uri: UI_URI }));
   assert.equal(resource.result.contents[0].mimeType, 'text/html;profile=mcp-app');
+  assert.deepEqual(resource.result.contents[0]._meta['openai/ui'].availableDisplayModes, ['inline', 'fullscreen', 'pip']);
   assert.match(resource.result.contents[0].text, /ui\/initialize/);
   assert.doesNotMatch(resource.result.contents[0].text, /<script[^>]+src=|fetch\(|Notification\./);
   assert.equal((await handle(call('resources/read', { uri: 'file:///etc/passwd' }))).error.code, -32602);
