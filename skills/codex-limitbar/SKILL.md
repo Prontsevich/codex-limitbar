@@ -41,10 +41,10 @@ Repo: https://github.com/Prontsevich/codex-limitbar
    page exists and defines `codexWindowType` + `electronBridge` — and refuses otherwise.
 3. It attaches to the shell page(s), registers `bar.js` with
    `Page.addScriptToEvaluateOnNewDocument` (survives reloads) and evaluates it now.
-4. It spawns the app's bundled `codex app-server` (`Contents/Resources/codex-cli/bin/codex`
-   since 26.924; stdio JSON-RPC, `account/rateLimits/read`) every 5 minutes, after wake
-   and on the panel's refresh button (a CDP binding, `__sprBarRefreshBinding`), and pushes
-   the numbers via `__sprBarSetLimits`. It exits when the app quits.
+4. It follows usage updates from the verified shell and pushes the numbers via
+   `__sprBarSetLimits`. The bundled `codex app-server` (`account/rateLimits/read`)
+   supplies manual refreshes, missing reset-credit details, and the 5-minute fallback
+   when the shell has no fresh snapshot. The agent exits when the app quits.
 5. Clicking the bar opens a details panel (plan, per-window bars, reset times, reset
    credits, warnings, `used|left` toggle, refresh) — the one transient overlay.
 

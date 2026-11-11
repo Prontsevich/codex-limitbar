@@ -30,7 +30,7 @@
 // ChatGPT's own (its icon, its Notification settings). They are always prefixed
 // "LimitBar", fire at most once per window cycle, and permission is never requested.
 (() => {
-  const BAR_VERSION = 31;
+  const BAR_VERSION = 55;
   const ID = 'spr-statusbar';
   const PANEL_ID = ID + '-panel';
   const STYLE_ID = ID + '-style';
@@ -334,12 +334,13 @@
   ].join('\n');
 
   // ---- layout discovery ---------------------------------------------------------------
-  // The app layout container: a direct child of #root. Prefer the class-name prefix
-  // (hash suffix varies per build), fall back to geometry: non-fixed, >=85% viewport
-  // height, >=50% width. Boot loaders / toasts are skipped.
+  // The current shell marks its frame inside a display: contents wrapper.
+  // Older shells use a direct child of #root, identified by class or geometry.
   const findLayouts = () => {
     const root = document.getElementById('root');
     if (!root) return [];
+    const frames = [...root.querySelectorAll('[data-app-shell-frame]')];
+    if (frames.length) return frames;
     const byName = [...root.children].filter(ch => /(^|\s)_Layout_/.test(String(ch.className || '')));
     if (byName.length) return byName;
     const out = [];
@@ -356,7 +357,7 @@
   // sits in the window frame's bottom gutter (transparent, like the top toolbar band).
   const findCard = layout => {
     if (!layout) return null;
-    const el = layout.querySelector('[class*="_PageSurface_"]');
+    const el = layout.querySelector('[class*="_PageSurface_"], [data-app-shell-workspace] > [class^="PageSurface-"]');
     if (!el) return null;
     const r = el.getBoundingClientRect();
     return r.width >= innerWidth * 0.3 && r.height >= innerHeight * 0.5 ? el : null;
@@ -492,6 +493,7 @@
       addEventListener('blur', onBlur);
       panelTick = setInterval(() => { render(); }, 10000);
       renderPanel();
+      try { window.__sprBarRefreshBinding?.('panel'); } catch {}
     } else {
       document.removeEventListener('pointerdown', onDocPointer, true);
       document.removeEventListener('keydown', onDocKey, true);
@@ -706,8 +708,8 @@
 
     h += '<div class="spr-hr"></div><div class="spr-sec"><div class="spr-h">About</div><div class="spr-about">'
       + '<div>LimitBar v' + BAR_VERSION + '</div>'
-      + '<div>Source: ChatGPT app-server</div>'
-      + '<div>Refreshes every 5 min</div>'
+      + '<div>Source: ' + (st.meta?.source === 'native' ? 'ChatGPT window' : 'ChatGPT app-server') + '</div>'
+      + '<div>Automatic updates · 5 min fallback</div>'
       + '<div>Diagnostics: <code>./start.sh --doctor</code></div>'
       + '</div></div>';
     return h;
@@ -883,7 +885,7 @@
 
   window.__sprBarSetLimits = (arr, meta) => {
     try {
-      const prevLimits = st.limits;
+      const prevLimits = st.limits.length ? st.limits : meta?.prevLimits;
       st.limits = (arr || []).map(l => ({
         name: String(l.name || l.id || '?'),
         usedPercent: Number(l.usedPercent != null ? l.usedPercent : l.used) || 0,
@@ -891,10 +893,13 @@
         windowDurationMins: Number(l.windowDurationMins) || null
       }));
       if (meta) { st.live = !!meta.live; st.meta = meta; }
-      refreshDone();
+      if (meta?.source !== 'native') refreshDone();
       render();
       // A push after a reset replaces the old window: announce that reset first.
-      try { checkResets(prevLimits); checkNotify(); } catch (err) {}
+      try {
+        if (!meta?.accountChanged) checkResets(prevLimits);
+        checkNotify();
+      } catch (err) {}
       return true;
     } catch (err) { return false; }
   };

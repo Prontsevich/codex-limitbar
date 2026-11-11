@@ -54,8 +54,13 @@ done
 
 APP_EXE="$APP/Contents/MacOS/$(defaults read "$APP/Contents/Info.plist" CFBundleExecutable 2>/dev/null || echo ChatGPT)"
 
-# pid of the app's main process (helpers live under Frameworks/, not Contents/MacOS/)
-app_pid() { pgrep -f "^$APP_EXE( |\$)" 2>/dev/null | head -n 1 || true; }
+# Match the executable path independently of the argument list used by LaunchServices.
+app_pid() {
+  /bin/ps -axo pid=,comm= 2>/dev/null | awk -v exe="$APP_EXE" '
+    { pid = $1; sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "") }
+    !found && $0 == exe { print pid; found = 1 }
+  ' || true
+}
 
 # the --remote-debugging-port the running app was started with, if any
 app_port() {
@@ -88,10 +93,12 @@ agent_alive() {
 }
 
 quit_app() {
+  local pid
   osascript -e "quit app id \"$BUNDLE_ID\"" >/dev/null 2>&1 || true
   for _ in $(seq 1 40); do [ -n "$(app_pid)" ] || break; sleep 0.5; done
-  if [ -n "$(app_pid)" ]; then
-    pkill -TERM -f "^$APP_EXE( |\$)" 2>/dev/null || true
+  pid="$(app_pid)"
+  if [ -n "$pid" ]; then
+    kill -TERM "$pid" 2>/dev/null || true
     for _ in $(seq 1 20); do [ -n "$(app_pid)" ] || break; sleep 0.5; done
   fi
   if [ -n "$(app_pid)" ]; then echo "!! ChatGPT did not quit; aborting"; exit 1; fi
@@ -167,7 +174,8 @@ fi
 if [ -n "$APID" ] && [ -n "$APORT" ] && agent_alive "${S_PID:-}" && [ "${S_APP:-}" = "$APID" ] && [ "${S_PORT:-}" = "$APORT" ]; then
   open -b "$BUNDLE_ID"
   if [ "$CAPTURE" -eq 1 ]; then
-    "$NODE" "$DIR/limitbar.mjs" --port "$APORT" --app "$APP" --log "$LOG" --once --capture "$DIR/last-run.png" || true
+    "$NODE" "$DIR/skills/codex-limitbar/scripts/cdp-eval.mjs" --port "$APORT" --app "$APP" \
+      -e 'true' --png "$DIR/last-run.png" >/dev/null || true
   fi
   echo "== OK: bar already active (agent pid $S_PID, port $APORT)"
   exit 0

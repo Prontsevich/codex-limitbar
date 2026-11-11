@@ -54,8 +54,11 @@ Live response shape (camelCase):
 What `parseLimits` passes to the bar: per window `{name, usedPercent, resetsAtMs,
 windowDurationMins}`; meta `{live, planType, resetCredits, resetCreditsNextExpiresAtMs
 (earliest available credit), resetCreditTitle (its title, trimmed, ≤ 80 chars),
-limitReached, spendControlReached, usageAllowed, updatedAtMs}`. Deliberately **not**
-passed: credit ids and descriptions, `accountId`, `rateLimitUpsell`.
+resetCreditsList ([{expiresAtMs, title}] — every available credit, soonest expiry first),
+limitReached, spendControlReached, usageAllowed, updatedAtMs}`. A credit whose `status` is
+not `available` is skipped; an account with no credits gets an empty list instead of a
+missing field. Deliberately **not** passed: credit ids and descriptions, `accountId`,
+`rateLimitUpsell`.
 
 ## Quick probe
 

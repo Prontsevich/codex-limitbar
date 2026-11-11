@@ -42,9 +42,12 @@ the app's local UI over the Chrome DevTools Protocol (CDP).
    `app://-/index.html` shell page and the shell's own globals — and refuses otherwise.
 3. The agent injects `bar.js` into the shell page and registers it to run on every
    reload, so the bar survives window reloads.
-4. Limits are read from the app's own bundled `codex app-server` (stdio JSON-RPC,
-   `account/rateLimits/read`) every 5 minutes and after the Mac wakes, and pushed into
-   the bar.
+4. The bar follows the active account's usage snapshots in the ChatGPT window as
+   they arrive. The bundled `codex app-server` (`account/rateLimits/read`) supplies
+   manual refreshes, missing reset-credit details, and a 5-minute fallback when
+   the window has no fresh snapshot. Opening the panel or returning to the window
+   also checks data older than a minute. A read is scheduled shortly after an
+   expected reset if the window has yet to roll over.
 5. The agent exits when ChatGPT quits.
 
 Why CDP: up to build 26.917 the bar was installed through the Electron main-process
@@ -156,7 +159,7 @@ Escape goes back; Escape on the main view closes the panel). Every setting is pe
 
   They only arrive while a ChatGPT window with the bar is open. If ChatGPT's notifications
   are off, Settings says so; the bar never asks for permission itself.
-- **About**: bar version, data source and refresh interval, and the diagnostics command.
+- **About**: bar version, current data source, fallback interval, and the diagnostics command.
 
 ## Uninstall
 

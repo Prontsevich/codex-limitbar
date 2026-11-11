@@ -28,23 +28,31 @@ ChatGPT 26.917 the bar was installed through the Electron main-process inspector
    every eligible page (`isShellUrl`: exact shell URL or `app://-/index.html?…` without
    `avatar-overlay`) gets `Target.attachToTarget({flatten: true})` → `Page.enable`,
    `Runtime.enable`, `Runtime.addBinding({name: '__sprBarRefreshBinding'})` (not for
-   `--once`), `Page.addScriptToEvaluateOnNewDocument({source: bar.js})` and an
-   immediate `Runtime.evaluate(bar.js)`. Concurrent attach requests for one target (the
+   `--once`), `Page.addScriptToEvaluateOnNewDocument` and an immediate
+   `Runtime.evaluate` of the bar and native observer. Concurrent attach requests for one target (the
    `targetCreated` burst vs the `getTargets` pass) share one in-flight promise.
 4. **Reloads**: on `Page.loadEventFired` the agent checks
-   `typeof window.__sprBarSetLimits === 'function'`; if missing it re-evaluates `bar.js`,
+   `typeof window.__sprBarSetLimits === 'function'`; if missing it re-evaluates the payload,
    then pushes the latest limits either way. A target that navigates away from the shell
    gets its new-document script removed and is detached.
 5. **State**: after the first successful injection the agent writes
    `~/Library/Application Support/spr-limitbar/agent.json`
    `{pid, port, app, appPid, barVersion, startedAt}` (`CODEX_LIMITBAR_STATE_DIR` overrides).
    `start.sh` uses it for the fast path (agent alive + same app pid + same port).
+   Direct reads and native window changes update `limits.json`
+   `{atMs, limits, accountScope}` in that directory. Unchanged native windows refresh
+   it at most once per 5 minutes. The prior snapshot is carried into the push as
+   `meta.prevLimits` / `meta.prevAtMs` for offline rollover detection. Snapshots older
+   than 30 days or with a different account fingerprint are ignored. Legacy unscoped
+   snapshots can only be compared with another unscoped read.
 6. **Lifetime**: when the browser websocket closes (app quit / relaunch) the agent retries
    the same port for 30 s — the app may relaunch itself with the same argv (its Node
    permission-model restart) — then removes the state file and exits. SIGTERM/SIGINT:
    `__sprBarRemove()` in every page, `Runtime.removeBinding`,
-   `Page.removeScriptToEvaluateOnNewDocument`, detach, exit 0. `--once` injects + pushes (+ captures) and disconnects without touching the
-   running agent's state; the bar stays until the next reload.
+   `Page.removeScriptToEvaluateOnNewDocument`, detach, exit 0. `--once` injects,
+   reads once, and disconnects without writing the running agent's state; the bar
+   stays until the next reload. Capturing an already running bar uses a read-only
+   connection to the verified shell.
 
 The port itself cannot be closed from CDP: it lives until the app process exits.
 
@@ -220,13 +228,41 @@ For a window with `windowDurationMins` and `resetsAtMs`:
   `~/.local/bin`, mise shims, Homebrew; the agent logs `limits source: …` on change), `rpcFetch` (stdio JSON-RPC, 15 s budget),
   `parseLimits` (pure, unit-tested), `nameForWindow`. Protocol:
   `rate-limits-protocol.md`.
-- Cadence: a 30 s tick; a poll when 5 minutes have passed, or immediately when a tick
-  arrives more than 90 s late (the Mac slept). One poll in flight at a time.
+- `lib/native-limits.mjs` subscribes to the shell's usage cache in the main frame.
+  It accepts a single observed, account-scoped `rate-limit-status` query whose
+  payload matches that account. It projects the usage windows and status fields
+  into the existing parser's input and forwards the cache's own update time.
+  The account ID is used only in memory to match direct reads. The saved snapshot
+  keeps an account fingerprint so a restart on another account cannot report a
+  rollover from the previous account's windows.
+- Fresh native updates suppress periodic reads. The 30 s tick checks for a
+  5-minute-old or missing native snapshot and for an announced reset that has
+  passed by at least 5 s. Foreground and panel-open signals check data older
+  than 1 minute. Manual refresh still reads directly with the 10 s throttle.
+  Only one direct read is in flight. If a newer native snapshot arrives during
+  the read, it stays on the bar. A cache replay with a newer timestamp cannot
+  move the bar back to an older window or a lower percentage in the same window
+  after a direct read.
+- The window cache can include only the reset-credit count. The direct read
+  fills in missing details for the same account and count, without replacing
+  newer usage windows. The fallback also works on desktop builds that lack
+  the expected private cache shape.
+- A tick arriving more than 90 s late indicates sleep. On wake, the agent first
+  replaces its CDP connection, then checks whether the reattached window has a
+  fresh native snapshot before reading directly.
 - Each successful read is pushed into every attached page with
   `__sprBarSetLimits(limits, meta)` — and right after every injection, so a reloaded
   window shows live numbers at once. A failed read is logged and pushed as `meta.error`:
   the bar keeps the last good numbers marked `stale` (error in the panel), or shows
   `limits unavailable` when no read has succeeded yet. The next good read clears it.
+- A delivery timeout (even with an open WebSocket), another transport error, or loss
+  of all shell sessions starts one connection recovery. The agent discards old
+  sessions, closes the old socket, repeats the full identity check, reinjects the bar,
+  pushes cached limits, and falls back to a read if needed. Delayed events and attach completions from
+  the old connection cannot replace sessions on the new connection. Page exceptions
+  are logged without reconnecting. Retries back off from 1 s to 30 s and continue
+  while the app owns the debugging port; the agent exits once that ownership has
+  been absent for 30 s. A normal app restart without the port still needs `start.sh`.
 - `rpcFetch` SIGTERMs the app-server after the answer and SIGKILLs it after a 2 s grace;
   a process `exit` handler kills any child still alive, so none outlives the agent.
 

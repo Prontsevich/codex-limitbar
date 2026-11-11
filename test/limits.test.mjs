@@ -37,7 +37,7 @@ test('both windows, reset credits and plan', () => {
   ]);
   assert.deepEqual(r.meta, {
     live: true, planType: 'plus', resetCredits: 3,
-    resetCreditsNextExpiresAtMs: null, resetCreditTitle: null,
+    resetCreditsNextExpiresAtMs: null, resetCreditTitle: null, resetCreditsList: [],
     limitReached: null, spendControlReached: false, usageAllowed: true,
     updatedAtMs: NOW,
   });
@@ -85,16 +85,23 @@ const credit = (over = {}) => Object.assign({
   title: 'Full reset (Weekly + 5 hr)', description: 'Thanks for using Codex!',
 }, over);
 
-test('reset credits: earliest available expiry, title only, no ids/descriptions', () => {
-  const rc = { availableCount: 2, credits: [
+test('reset credits: earliest available expiry, sorted list, title only, no ids/descriptions', () => {
+  const rc = { availableCount: 3, credits: [
     credit({ expiresAt: 1792699499, title: 'Later' }),
     credit({ expiresAt: 1790000100, status: 'used', title: 'Used one' }),
     credit({ expiresAt: 1791077573, title: '  Full reset (Weekly + 5 hr)  ' }),
+    credit({ expiresAt: 1792000000, title: 'Middle', grantedAt: 1789000000 }),
   ] };
   const r = parseLimits({ rateLimits: bucket(), rateLimitResetCredits: rc, accountId: 'acc_x', rateLimitUpsell: { a: 1 } }, NOW);
-  assert.equal(r.meta.resetCredits, 2);
+  assert.equal(r.meta.resetCredits, 3);
   assert.equal(r.meta.resetCreditsNextExpiresAtMs, 1791077573000);
   assert.equal(r.meta.resetCreditTitle, 'Full reset (Weekly + 5 hr)');
+  // Soonest expiry first; the `used` credit is dropped; ids/descriptions are not carried.
+  assert.deepEqual(r.meta.resetCreditsList, [
+    { expiresAtMs: 1791077573000, title: 'Full reset (Weekly + 5 hr)' },
+    { expiresAtMs: 1792000000000, title: 'Middle' },
+    { expiresAtMs: 1792699499000, title: 'Later' },
+  ]);
   const json = JSON.stringify(r);
   for (const leak of ['RateLimitResetCredit', 'Thanks for using', 'acc_x', 'Upsell']) assert.ok(!json.includes(leak), leak);
 });
@@ -104,6 +111,7 @@ test('reset credits: missing, empty or all unavailable', () => {
     const r = parseLimits({ rateLimits: bucket(), rateLimitResetCredits: rc }, NOW);
     assert.equal(r.meta.resetCreditsNextExpiresAtMs, null);
     assert.equal(r.meta.resetCreditTitle, null);
+    assert.deepEqual(r.meta.resetCreditsList, []);
   }
 });
 
