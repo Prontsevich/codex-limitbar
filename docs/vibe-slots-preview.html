@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vibe Slots · LimitBar design preview</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --canvas: light-dark(#f8f8fa, #1b1b1e);
+      --text: light-dark(#242428, #efeff3);
+      --muted: light-dark(#5e5e69, #aaaab7);
+      --control: light-dark(#fff, #303036);
+      --border: light-dark(#cbcad1, #53535b);
+      --accent: light-dark(#174f91, #9ec9ff);
+      font: 14px/1.5 system-ui, sans-serif;
+    }
+    body { margin: 0; background: var(--canvas); color: var(--text); }
+    main { box-sizing: border-box; width: min(100%, 520px); margin: 0 auto; padding: 18px 16px; }
+    h1 { margin: 0; font-size: 20px; font-weight: 600; }
+    header p { margin: 2px 0 12px; color: var(--muted); }
+    .machines {
+      border-radius: 10px;
+      background-image: radial-gradient(circle, var(--border) 0.5px, transparent 1px);
+      background-size: 12px 12px;
+    }
+    button {
+      min-height: 32px;
+      padding: 4px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--control);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+    button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    button:disabled { opacity: .6; cursor: default; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Vibe Slots</h1>
+    <p>LimitBar sidebar design preview with sample values.</p>
+  </header>
+<div id="limitbar-vibe-slots-hybrid">
+  <div class="machines">
+    <figure>
+      <div class="machine mini" data-machine="single" aria-hidden="true"></div>
+      <figcaption>36×36 px</figcaption>
+    </figure>
+    <figure>
+      <div class="machine mini dual" data-machine="dual" aria-hidden="true"></div>
+      <figcaption>36×56 px</figcaption>
+    </figure>
+    <figure>
+      <div class="machine large dual" data-machine="dual" aria-hidden="true"></div>
+      <figcaption>3× preview</figcaption>
+    </figure>
+  </div>
+  <div class="controls">
+    <div class="mode" role="group" aria-label="Display mode">
+      <button type="button" class="btn" data-mode="used" aria-pressed="false">used</button>
+      <button type="button" class="btn" data-mode="left" aria-pressed="true">left</button>
+    </div>
+    <button type="button" class="btn" data-spin>Pull lever</button>
+    <p class="outcome" aria-live="polite" aria-atomic="true" data-outcome></p>
+  </div>
+  <template data-machine-face>
+    <div class="case">
+      <div class="readout" data-readout>
+        <span class="reel"><span class="strip"></span></span>
+        <span class="reel"><span class="strip"></span></span>
+      </div>
+      <span class="percent">%</span>
+    </div>
+    <span class="lever"><span class="lever-arm"></span><span class="lever-knob"></span></span>
+  </template>
+</div>
+<style>
+  #limitbar-vibe-slots-hybrid {
+    color-scheme: light dark;
+    --cabinet: light-dark(#48454d, #35323b);
+    --edge: light-dark(#716a77, #58535f);
+    --drum: #212127;
+    --drum-shade: #0c0c11;
+    --ink: #dedce6;
+    --brass: #f0c98d;
+    --lever: light-dark(#757b86, #a7a7b4);
+    --ok: #40c977;
+    --mid: #e8be5c;
+    --low: #ff9a47;
+    --crit: #ff7483;
+    font-family: system-ui, sans-serif;
+  }
+  #limitbar-vibe-slots-hybrid .machines {
+    display: flex;
+    justify-content: center;
+    align-items: end;
+    gap: clamp(10px, 3vw, 36px);
+    padding: 16px 8px 10px;
+  }
+  #limitbar-vibe-slots-hybrid figure { display: grid; justify-items: center; gap: 7px; margin: 0; }
+  #limitbar-vibe-slots-hybrid figcaption { text-align: center; font-size: 12px; }
+  #limitbar-vibe-slots-hybrid .machine {
+    position: relative;
+    width: calc(36 * var(--unit));
+    height: calc(var(--height, 36) * var(--unit));
+    overflow: hidden;
+  }
+  #limitbar-vibe-slots-hybrid .mini { --unit: 1px; }
+  #limitbar-vibe-slots-hybrid .large { --unit: 3px; }
+  #limitbar-vibe-slots-hybrid .dual { --height: 56; --lever-top: 20; }
+  #limitbar-vibe-slots-hybrid .case {
+    position: absolute;
+    inset: calc(2 * var(--unit)) calc(6 * var(--unit)) calc(2 * var(--unit)) var(--unit);
+    box-sizing: border-box;
+    display: grid;
+    align-content: center;
+    gap: calc(2 * var(--unit));
+    padding: calc(2 * var(--unit)) var(--unit);
+    border-radius: calc(4 * var(--unit));
+    border: var(--unit) solid var(--edge);
+    background: linear-gradient(125deg, var(--edge), var(--cabinet) 28%, var(--cabinet) 70%, var(--edge));
+    box-shadow: inset 0 0 0 calc(.45 * var(--unit)) color-mix(in srgb, var(--brass) 55%, transparent);
+  }
+  #limitbar-vibe-slots-hybrid .readout {
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    align-items: center;
+    gap: calc(.6 * var(--unit));
+    font: 600 calc(15 * var(--unit))/1 ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  #limitbar-vibe-slots-hybrid .readout[data-band="ok"] { color: var(--ok); }
+  #limitbar-vibe-slots-hybrid .readout[data-band="mid"] { color: var(--mid); }
+  #limitbar-vibe-slots-hybrid .readout[data-band="low"] { color: var(--low); }
+  #limitbar-vibe-slots-hybrid .readout[data-band="crit"] { color: var(--crit); }
+  #limitbar-vibe-slots-hybrid .readout + .readout { margin-top: calc(3 * var(--unit)); }
+  #limitbar-vibe-slots-hybrid .reel {
+    min-width: 0;
+    height: calc(14 * var(--unit));
+    overflow: hidden;
+    border-radius: var(--unit);
+    background: linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--drum) 60%, var(--drum-shade)),
+      var(--drum) 23% 76%,
+      color-mix(in srgb, var(--drum) 70%, var(--drum-shade))
+    );
+  }
+  #limitbar-vibe-slots-hybrid .strip { display: block; }
+  #limitbar-vibe-slots-hybrid .strip span { display: grid; place-items: center; height: calc(14 * var(--unit)); }
+  #limitbar-vibe-slots-hybrid .strip .symbol {
+    font: calc(9.5 * var(--unit))/1 "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  }
+  #limitbar-vibe-slots-hybrid .percent {
+    font-size: calc(8 * var(--unit));
+    line-height: 1;
+    text-align: center;
+    color: var(--brass);
+  }
+  #limitbar-vibe-slots-hybrid .lever {
+    position: absolute;
+    left: calc(31 * var(--unit));
+    top: calc(var(--lever-top, 11) * var(--unit));
+    width: calc(2 * var(--unit));
+    height: calc(13 * var(--unit));
+  }
+  #limitbar-vibe-slots-hybrid .lever-arm {
+    position: absolute;
+    inset: 0;
+    transform-origin: 50% 100%;
+    border-radius: var(--unit);
+    background: linear-gradient(to right, var(--lever), #ebdce0 55%, var(--lever));
+  }
+  #limitbar-vibe-slots-hybrid .lever::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: calc(-1 * var(--unit));
+    width: calc(4 * var(--unit));
+    height: calc(4 * var(--unit));
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: var(--lever);
+  }
+  #limitbar-vibe-slots-hybrid .lever-knob {
+    position: absolute;
+    z-index: 1;
+    left: 50%;
+    top: calc(-2 * var(--unit));
+    width: calc(6 * var(--unit));
+    height: calc(6 * var(--unit));
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 28%, #ffb2a3, #dc3b45 48%, #711320 88%);
+  }
+  #limitbar-vibe-slots-hybrid .controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding-top: 8px;
+  }
+  #limitbar-vibe-slots-hybrid .mode { display: flex; gap: 4px; }
+  #limitbar-vibe-slots-hybrid .outcome {
+    flex-basis: 100%;
+    margin: 0;
+    text-align: center;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('limitbar-vibe-slots-hybrid');
+  const button = root.querySelector('[data-spin]');
+  const modes = [...root.querySelectorAll('[data-mode]')];
+  const outcome = root.querySelector('[data-outcome]');
+  const template = root.querySelector('[data-machine-face]');
+  const machines = [...root.querySelectorAll('[data-machine]')];
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const samples = [[18, 73], [0, 100], [9, 64], [100, 0], [0.4, 99.6]];
+  let sampleIndex = 0;
+  let mode = 'left';
+
+  for (const machine of machines) {
+    machine.append(template.content.cloneNode(true));
+    if (machine.dataset.machine === 'dual') {
+      const first = machine.querySelector('[data-readout]');
+      first.after(first.cloneNode(true));
+    }
+  }
+
+  const band = percent => percent < 10 ? 'crit' : percent < 25 ? 'low' : percent < 50 ? 'mid' : 'ok';
+  const valueFor = remaining => mode === 'left' ? remaining : 100 - remaining;
+  const specialFace = () => mode === 'left' ? '⭐' : '💀';
+  const faces = remaining => {
+    const value = valueFor(remaining);
+    if (value === 100) {
+      const symbol = specialFace();
+      return [symbol, symbol];
+    }
+    return [...String(Math.min(99, Math.round(value))).padStart(2, '0')];
+  };
+  const cell = face => {
+    const element = document.createElement('span');
+    element.textContent = face;
+    if (face === specialFace()) element.className = 'symbol';
+    return element;
+  };
+
+  function show(values) {
+    for (const machine of machines) {
+      [...machine.querySelectorAll('[data-readout]')].forEach((row, index) => {
+        const value = values[machine.dataset.machine === 'single' ? 1 : index];
+        row.dataset.band = band(value);
+        const finalDigits = faces(value);
+        [...row.querySelectorAll('.strip')].forEach((strip, reel) => {
+          strip.replaceChildren(cell(finalDigits[reel]));
+        });
+      });
+    }
+    const format = remaining => valueFor(remaining).toLocaleString('en-US', { maximumFractionDigits: 1 }) + '%';
+    const label = mode === 'left' ? 'left' : 'used';
+    outcome.textContent = '5h ' + format(values[0]) + ' · Weekly ' + format(values[1]) + ' ' + label;
+  }
+
+  async function roll(values) {
+    const animations = [];
+    for (const machine of machines) {
+      const arm = machine.querySelector('.lever-arm');
+      const knob = machine.querySelector('.lever-knob');
+      const pull = { duration: 370, easing: 'ease-in-out' };
+      animations.push(arm.animate([
+        { transform: 'scaleY(1)' },
+        { transform: 'scaleY(0)', offset: .24 },
+        { transform: 'scaleY(-.46)', offset: .38 },
+        { transform: 'scaleY(-.46)', offset: .48 },
+        { transform: 'scaleY(0)', offset: .68 },
+        { transform: 'scaleY(1.1)', offset: .91 },
+        { transform: 'scaleY(1)' }
+      ], pull).finished, knob.animate([
+        { transform: 'translate(-50%, 0) scale(1)' },
+        { transform: 'translate(-50%, calc(12 * var(--unit))) scale(1.22)', offset: .24 },
+        { transform: 'translate(-50%, calc(18 * var(--unit))) scale(1)', offset: .38 },
+        { transform: 'translate(-50%, calc(18 * var(--unit))) scale(1)', offset: .48 },
+        { transform: 'translate(-50%, calc(12 * var(--unit))) scale(1.22)', offset: .68 },
+        { transform: 'translate(-50%, calc(-1.2 * var(--unit))) scale(1)', offset: .91 },
+        { transform: 'translate(-50%, 0) scale(1)' }
+      ], pull).finished);
+      [...machine.querySelectorAll('[data-readout]')].forEach((row, index) => {
+        const windowIndex = machine.dataset.machine === 'single' ? 1 : index;
+        const finalDigits = faces(values[windowIndex]);
+        [...row.querySelectorAll('.strip')].forEach((strip, reelIndex) => {
+          const finalDigit = finalDigits[reelIndex];
+          const middle = Array.from({ length: 12 }, (_, step) => {
+            const face = (step + reelIndex * 3 + windowIndex) % 11;
+            return face === 10 ? specialFace() : String(face);
+          });
+          strip.append(...middle.map(cell), cell(finalDigit));
+          const cellHeight = strip.parentElement.clientHeight;
+          const offset = (strip.childElementCount - 1) * cellHeight;
+          const motion = strip.animate([
+            { transform: 'translateY(0)', easing: 'cubic-bezier(.32,.44,.22,1)' },
+            { transform: 'translateY(-' + (offset + cellHeight * .21) + 'px)', offset: .89, easing: 'ease-out' },
+            { transform: 'translateY(-' + offset + 'px)' }
+          ], { delay: 240, duration: 500 + reelIndex * 85 + windowIndex * 155, fill: 'forwards' });
+          animations.push(motion.finished.then(() => {
+            strip.replaceChildren(cell(finalDigit));
+            motion.cancel();
+          }));
+        });
+      });
+    }
+    await Promise.all(animations);
+  }
+
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    for (const toggle of modes) toggle.disabled = true;
+    sampleIndex = (sampleIndex + 1) % samples.length;
+    const values = samples[sampleIndex];
+    try {
+      if (!reducedMotion.matches) await roll(values);
+    } finally {
+      show(values);
+      button.disabled = false;
+      for (const toggle of modes) toggle.disabled = false;
+    }
+  });
+  for (const toggle of modes) {
+    toggle.addEventListener('click', () => {
+      mode = toggle.dataset.mode;
+      for (const option of modes) option.setAttribute('aria-pressed', String(option === toggle));
+      show(samples[sampleIndex]);
+    });
+  }
+  show(samples[sampleIndex]);
+})();
+</script>
+
+</main>
+</body>
+</html>

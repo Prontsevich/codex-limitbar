@@ -144,8 +144,8 @@ alongside the script so Raycast can resolve the relative `@raycast.icon` path.
 - Colors come only from the app's own theme tokens (`--app-color-*`), so the bar follows
   light/dark switches instantly.
 - Per limit: `[name] [mini bar] [NN% used] [time to reset]`. Color by the amount
-  **remaining**: ≥ 50 green, ≥ 25 yellow, ≥ 10 orange,
-  < 10 red. A thin tick on the mini bar marks the even-pace point (see below).
+  **remaining**: ≥ 50 green, ≥ 25 yellow, ≥ 10 orange, < 10 red (configurable in Settings).
+  A thin tick on the mini bar marks the even-pace point (see below).
 - A status dot on the far right: green = live, orange = stale (data older than 15 minutes
   or the last read failed). Before the first read the bar says `waiting for data…`.
 - One limit row is normal — the 5-hour window is suspended for many accounts.
@@ -162,24 +162,62 @@ bar in the app's own menu style and closes on a click outside, Escape, or a seco
   window, and a line under it reads `On pace`, `12% over pace` or `8% under pace`. When you
   are over pace and would run out before the reset: `At this pace: out in 2d 4h`. Pace is
   skipped in the first 2% of a window. Turn it off in Settings (`Pace marker`).
-- Reset credits: how many are available, when the next one expires, and its title.
-  (Using a credit stays in ChatGPT itself — the panel only shows them.)
+- Reset credits: how many are available, when the next one expires, and its title, plus a
+  `View all · N` row that opens the **Reset credits** screen — one row per available credit
+  with its expiry (`in 13d 23h · 22 Oct`). ← or Escape goes back. (Using a credit stays in
+  ChatGPT itself — the panel only shows them.)
 - Warnings when a limit or the spend limit is reached, usage is not allowed, or the last
   read failed (with the error).
 
 **Settings** — the gear in the panel header switches the panel to its settings view (← or
 Escape goes back; Escape on the main view closes the panel). Every setting is persisted:
 
-- **Display**: `Show used | left` and the `Pace marker` switch (both apply to the bar too).
-- **Notify me** — macOS notifications, sent through the ChatGPT page, so they appear as
-  ChatGPT's own (its icon and its settings in System Settings → Notifications), always
-  titled `LimitBar · Codex`. Each event fires at most once per window cycle:
-  - the weekly limit has reset (if any of it had been used; 5-hour resets are not announced) — **on** by default;
+- **Display**: `Position` switches between `Bottom` (default) and `Sidebar`. The sidebar
+  indicator sits above **Usage** and opens the same details panel. Hover for percentages
+  and reset times. If the sidebar rail is unavailable, the bottom strip provides access
+  to the settings.
+  `Sidebar style` offers `Vertical` (default), `Horizontal`, `Rings`, and `Vibe Slots`.
+  Weekly is taller in a vertical pair and thicker in a horizontal pair. A lone bar
+  or ring is thicker. In `Rings`, Weekly is the outer ring and 5h is the inner ring.
+  `Show used | left` applies to every style, and `Pace marker`
+  appears on the bars and rings.
+  The panel stays near the bottom of the window. Display changes keep its horizontal
+  position. The Sidebar style row expands and collapses with the Settings panel.
+  The indicator and its layout space animate together when switching
+  positions and when the helper starts or stops. Reduced motion uses instant changes.
+- **Vibe Slots** shows two reels per window. It spins when a fresh update changes the
+  displayed value and after a successful manual refresh. The **Pull lever** icon in the
+  details panel replays the current reading. With reduced motion, the button is
+  disabled and updates show the result immediately. The exact 100% result uses
+  ⭐⭐ in `left` and 💀💀 in `used`.
+- **Color thresholds**: the `% remaining` cut-offs for the green/yellow/orange/red colors,
+  as three `−/+` fields (`Yellow below`, `Orange below`, `Red below`). `Apply to` picks the
+  scope: **All** sets the defaults every window uses, and any window button (5-hour,
+  Weekly, …) overrides them for that window alone. The values are kept ordered
+  (red < orange < yellow) and in range; out-of-range entries are clamped into the field.
+  `Reset to defaults` restores 50 / 25 / 10 for the selected scope. Defaults:
+  50 / 25 / 10.
+- **Notify me** — two channels for the same event, and only for a reset that does not
+  belong to the weekly schedule. A weekly roll within 3 h of the reset time the previous
+  cycle announced is just the plan; it is recorded in the panel, silently. An **off-schedule**
+  reset — the usage dropping back to zero days before its stamp — changes the `Limits` label
+  in the bar to `Weekly limit reset` for 45 s in the success colour, keeps a line in the panel
+  for a day, and sends a macOS notification. A reset that happened while ChatGPT was closed is
+  reported the same way on the next start (the agent keeps the previous read in
+  `~/Library/Application Support/spr-limitbar/limits.json`), with `while closed` added to the
+  panel line. Those notifications go through
+  the ChatGPT page, so they appear as ChatGPT's own (its icon and its settings in System
+  Settings → Notifications), always titled `LimitBar · Codex`. Each event fires at most once
+  per window cycle:
+  - the weekly limit has reset — **on** by default;
   - a reset credit expires within 24 h — **on** by default;
   - less than 25% / less than 10% left — off by default.
 
-  They only arrive while a ChatGPT window with the bar is open. If ChatGPT's notifications
-  are off, Settings says so; the bar never asks for permission itself.
+  The page is not allowed to notify until it asks, and it only asks from the
+  **Enable…** row in this section — one macOS prompt, never on load. Until then the
+  reset still shows in the bar; the notification is just the extra channel. They only
+  arrive while a ChatGPT window with the bar is open, and `denied` in System Settings →
+  Notifications silences them permanently.
 - **About**: bar version, current data source, fallback interval, and the diagnostics command.
 
 ## Uninstall
@@ -225,10 +263,16 @@ Common cases:
 - **`no app://-/index.html page target`** — the main window is not open yet or was closed;
   open it and re-run `start.sh`.
 - **`Node.js >= 22 not found`** — install Node 22+, or point `CODEX_LIMITBAR_NODE` at it.
-- **Bar says `limits unavailable` or `stale`** — the limits read fails (open the panel for the error). Check the log for
-  `limits ERR`, then probe the CLI directly:
+- **Bar says `limits unavailable` or `stale`** — either reading limits or delivering them to the
+  panel failed. `limits ERR` in the log means a read failure (open the panel for the error).
+  Probe the CLI directly:
   `python3 skills/codex-limitbar/scripts/probe_rate_limits.py /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`.
   If the probe fails too, run `codex login` (or sign in inside the app) and retry.
+  If `limits live` is followed by `push ERR`, the agent obtained fresh limits but could not
+  deliver them over CDP. It automatically reconnects after transport failures and after
+  wake, rechecks the app's identity, and pushes the latest values into the panel.
+  To recover an older agent manually, run `./start.sh --stop`, then `./start.sh`.
+  This restarts only the agent when the app's debugging port is still available.
 - **Bar gone after a ChatGPT update** — Sparkle relaunches the app without the port; run
   `codex-limitbar` again. If it still fails, the update may have closed the method — see
   [Risks](#risks--read-before-installing).
@@ -243,14 +287,16 @@ Evaluate in the shell page, e.g.
 
 | Hook | Purpose |
 |------|---------|
-| `__sprBarSetLimits([{name, usedPercent, resetsAtMs, windowDurationMins?}], meta)` | push limits + `{live, planType, resetCredits, resetCreditsNextExpiresAtMs, resetCreditTitle, limitReached, spendControlReached, usageAllowed, updatedAtMs, error?}` |
+| `__sprBarSetLimits([{name, usedPercent, resetsAtMs, windowDurationMins?}], meta)` | push limits + `{live, planType, resetCredits, resetCreditsNextExpiresAtMs, resetCreditTitle, resetCreditsList, limitReached, spendControlReached, usageAllowed, updatedAtMs, error?}` |
 | `__sprBarSetMode('used' \| 'left')` | switch display mode |
-| `__sprBarSetPanel(open, view?)` | open / close the details panel; `view` is `'main'` (default) or `'settings'` |
+| `__sprBarSetPanel(open, view?)` | open / close the details panel; `view` is `'main'` (default), `'settings'` or `'credits'` |
 | `__sprBarSetPace(true \| false)` | show / hide the pace markers and lines |
 | `__sprBarSetNotify({reset, credit, low25, low10})` | change notification settings |
+| `__sprBarSetThresholds({crit, low, mid})` | color thresholds (global), by % remaining |
+| `__sprBarSetThresholds({scope, crit, low, mid})` | thresholds for one window (`scope` = `windowDurationMins`) or `{scope: 'default'}`; `{scope, reset: true}` restores the scope's defaults |
 | `__sprBarTestNotify()` | send one `LimitBar · test` notification |
 | `__sprBarSetNotifyDryRun(true \| false)` | record would-be notifications in state instead of showing them (tests) |
-| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen, panelView, pace, notify: {settings, permission, dryRun, log}}` |
+| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen, panelView, pace, thresholds: {defaults, windows}, notify: {settings, permission, dryRun, log}}` |
 | `__sprBarRemove()` | full teardown, restores the layout exactly |
 
 ## Development
@@ -262,6 +308,8 @@ bash -n start.sh install.sh uninstall.sh
 ```
 
 Contributor rules are in [`AGENTS.md`](AGENTS.md).
+
+The [Vibe Slots design record](docs/vibe-slots-design.md) links to its interactive preview.
 
 ## For coding agents
 

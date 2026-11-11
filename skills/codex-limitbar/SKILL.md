@@ -99,6 +99,10 @@ Checklist:
 3. Live bar state (port from step 1):
    `node scripts/cdp-eval.mjs --port <p> -e 'JSON.stringify(__sprBarGetState())'`.
    `waiting for data…` = no successful read yet; `stale` = last good data older than 15 min.
+   `limits live` followed by `push ERR` means the read succeeded but CDP delivery failed.
+   The agent reconnects automatically after transport errors and wake. For an older
+   running agent, run `./start.sh --stop`, then `./start.sh` to reconnect without restarting
+   the app when its debugging port is still open.
 4. Duplicates / old styles after an edit: `BAR_VERSION` in `bar.js` was not bumped;
    bump it, `./start.sh --stop && ./start.sh`.
 5. After a ChatGPT update: Sparkle relaunches without the port — re-run `start.sh`. If it
@@ -114,12 +118,14 @@ Checklist:
 |------|---------|
 | `__sprBarSetLimits([{name, usedPercent, resetsAtMs, windowDurationMins?}], meta)` | push limits + meta `{live, planType, resetCredits, resetCreditsNextExpiresAtMs, resetCreditTitle, limitReached, spendControlReached, usageAllowed, updatedAtMs, error?}` |
 | `__sprBarSetMode('used' \| 'left')` | switch the display mode |
-| `__sprBarSetPanel(open, view?)` | open / close the details panel; `view` is `'main'` (default) or `'settings'` |
+| `__sprBarSetPanel(open, view?)` | open / close the details panel; `view` is `'main'` (default), `'settings'` or `'credits'` |
 | `__sprBarSetPace(true \| false)` | show / hide the pace markers and lines |
 | `__sprBarSetNotify({reset, credit, low25, low10})` | change notification settings |
+| `__sprBarSetThresholds({crit, low, mid})` | color thresholds by % remaining (global defaults) |
+| `__sprBarSetThresholds({scope, crit, low, mid})` | thresholds for one window (`windowDurationMins`), or `{scope: 'default'}`; `{scope, reset: true}` restores defaults |
 | `__sprBarTestNotify()` | send one `LimitBar · test` notification |
 | `__sprBarSetNotifyDryRun(true \| false)` | record would-be notifications in state instead of showing them (tests) |
-| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen, panelView, pace, notify}` |
+| `__sprBarGetState()` | `{version, mode, live, limits, meta, theme, panelOpen, panelView, pace, event, notify}` (`event` = the last bar announcement, e.g. a weekly reset) |
 | `__sprBarRemove()` | full teardown: removes bar + panel and restores layout padding |
 
 ## Caveats

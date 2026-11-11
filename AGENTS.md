@@ -35,7 +35,7 @@ DevTools Protocol — no bundle modification. Two parts:
   `#spr-statusbar`, `#spr-statusbar-panel`, `#spr-statusbar-style`,
   `data-spr-padded` / `data-spr-orig-pad` / `data-spr-version`,
   `spr-statusbar-mode` / `spr-statusbar-pace` / `spr-statusbar-notify` /
-  `spr-statusbar-notified` (localStorage keys), state dir
+  `spr-statusbar-notified` / `spr-statusbar-thresholds` (localStorage keys), state dir
   `~/Library/Application Support/spr-limitbar/`, log
   `~/Library/Logs/spr-limitbar.log`. New DOM/global/storage/file names must
   follow.
@@ -54,16 +54,25 @@ DevTools Protocol — no bundle modification. Two parts:
   a zero covered-visible count (see `skills/codex-limitbar/references/internals.md`).
   The details panel is the one exception: a transient overlay the user opens,
   closed by outside click / Escape / blur, kept below the app's modals
-  (z-index 29 vs the app's z-30 layer).
+  (z-index 49 vs the app's z-50 layer; the peeking sidebar uses z-40).
 - **Colors come from the app's theme tokens** (`--app-color-*` and related,
   with fallbacks) — no hardcoded theme colors; theme switching must work with
   no JS.
 - **Notifications** (Web Notification API in the page, shown as ChatGPT's own):
   always titled `LimitBar …`, each event at most once per window cycle (dedupe
-  keys in `spr-statusbar-notified`, reset times rounded to 10 min), and **never
-  call `Notification.requestPermission()`** — without permission the Settings view shows
-  a hint instead. Test event logic with `__sprBarSetNotifyDryRun(true)`; a live
-  test shows at most one `__sprBarTestNotify()` banner.
+  keys in `spr-statusbar-notified`, reset times rounded to 10 min). A weekly reset is
+  announced in the bar itself as well — a 45 s chip in the label slot plus a line in the
+  panel — so the event never depends on the permission, and **only when it is off
+  schedule**: a roll whose new cycle starts within 3 h of the announced `resetsAt` is the
+  plan doing its weekly thing and is recorded in the panel silently. A roll that happened
+  while the app was closed is caught on the next start from the persisted snapshot in the
+  state dir (`limits.json`, carried as `meta.prevLimits` — no extra process, no launchd). Ask for that
+  permission in exactly one place, the Settings **Enable…** button that calls
+  `Notification.requestPermission()` on an explicit click; **never on load, never on a
+  timer, never anywhere else** (a page that never asks stays at `default` and every
+  notification dies silently — that was the bug behind "reset never fires"). Test event
+  logic with `__sprBarSetNotifyDryRun(true)`; a live test shows at most one
+  `__sprBarTestNotify()` banner.
 - **Never weaken the identity check** (`lib/cdp.mjs` `verifyIdentity`, mirrored
   in `cdp-eval.mjs`): port owner → CDP endpoint → exact shell page → shell
   globals. Every entry point that evaluates code runs it first.
