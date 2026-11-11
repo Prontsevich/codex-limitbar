@@ -16,7 +16,8 @@ DevTools Protocol — no bundle modification. Two parts:
     polling; runs until the app quits.
   - `lib/cdp.mjs` (CDP client + identity check), `lib/limits.mjs` (app-server
     JSON-RPC + parser), `test/` (`node --test`).
-  - `start.sh` (launcher), `install.sh` (PATH command, `--raycast`),
+  - `start.sh` (launcher), `install.sh` (PATH command, `--raycast`, `--app`),
+    `lib/launcher.mjs` (Dock/Spotlight app launcher installation),
     `uninstall.sh`, `raycast/codex-limitbar.sh` (Raycast Script Command),
     `install-skills.sh` (agent-skill installer).
 - **The skill**: `skills/codex-limitbar/` (product + protocol reference,

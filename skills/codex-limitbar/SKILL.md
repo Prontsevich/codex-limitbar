@@ -48,8 +48,9 @@ Repo: https://github.com/Prontsevich/codex-limitbar
 5. Clicking the bar opens a details panel (plan, per-window bars, reset times, reset
    credits, warnings, `used|left` toggle, refresh) — the one transient overlay.
 
-The bar exists only for launches that went through `start.sh` / the command / the Raycast
-script — a normal launch shows nothing (expected). **The CDP port stays open for the app's
+The bar exists only for launches that went through `start.sh`, **Codex with LimitBar.app**,
+the command or the Raycast script — a normal launch shows nothing (expected).
+**The CDP port stays open for the app's
 lifetime**; any process running as the user can drive the window meanwhile.
 
 ## Install, run, stop, remove
@@ -57,6 +58,7 @@ lifetime**; any process running as the user can drive the window meanwhile.
 ```bash
 git clone https://github.com/Prontsevich/codex-limitbar.git && cd codex-limitbar
 ./install.sh             # optional: `codex-limitbar` command in ~/.local/bin
+./install.sh --app       # Dock/Spotlight/Raycast launcher in ~/Applications
 ./install.sh --raycast   # optional: Raycast Script Command "Open ChatGPT with LimitBar"
 codex-limitbar           # or ./start.sh — fast path if already active
 ./start.sh --status      # app pid, CDP port, agent state

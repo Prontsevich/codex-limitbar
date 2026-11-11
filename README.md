@@ -100,10 +100,29 @@ Flags:
 ./start.sh --capture   # run as usual + save last-run.png of the main window
 ```
 
-A normal launch of ChatGPT (Dock, Spotlight, Raycast app search) shows **no bar** — open
-it through `codex-limitbar` / `start.sh` / the Raycast command below instead.
+A normal launch of the original ChatGPT app shows **no bar** — use the app launcher
+below, `codex-limitbar` / `start.sh`, or the Raycast Script Command instead.
 
-### Raycast
+### Dock, Spotlight and Raycast app search
+
+```bash
+./install.sh --app
+```
+
+This installs **Codex with LimitBar.app** into `~/Applications`. Open it from Spotlight
+or Raycast app search, or drag it from Finder into the Dock. It runs `start.sh` without
+opening Terminal and uses the original app's icon. If the bar is already active, it
+brings the window forward. If the app is running without CDP, it restarts it once.
+
+Use this launcher in place of the original app's Dock shortcut. The original app's
+launch behavior is unchanged. The launcher references this checkout, so updates apply
+immediately; after moving the repo, remove the old launcher and run `./install.sh --app`
+again. Failures show an alert with the log path:
+`~/Library/Logs/spr-limitbar-launcher.log`.
+`CODEX_LIMITBAR_LAUNCHER_DIR` overrides `~/Applications`. `uninstall.sh` removes only
+a launcher owned by this checkout.
+
+### Raycast Script Command
 
 ```bash
 ./install.sh --raycast            # links raycast/codex-limitbar.sh into ~/.config/raycast/scripts
@@ -114,6 +133,8 @@ Then in Raycast: **Settings → Extensions → Script Commands → Add Directori
 directory. Search **"Open ChatGPT with LimitBar"** and give it an alias (e.g. `chatgpt`) or
 a hotkey so it replaces the plain app launch. The command runs `start.sh` and shows its
 final status line; when the bar is already active it only brings the window forward.
+The command uses the Codex icon (`raycast/spr-codex-icon.png`); the installer links it
+alongside the script so Raycast can resolve the relative `@raycast.icon` path.
 
 ## What it looks like
 
@@ -171,8 +192,9 @@ Escape goes back; Escape on the main view closes the panel). Every setting is pe
 ```
 
 `uninstall.sh` stops the agent (the bar disappears from the live window and its saved
-display mode is cleared), removes the `codex-limitbar` command and the Raycast link (only
-if they are our symlinks), removes skill symlinks that point into this repo, the state
+display mode is cleared), removes the app launcher owned by this checkout, the
+`codex-limitbar` command and the Raycast link (only if they are our symlinks), removes
+skill symlinks that point into this repo, the state
 directory and the logs. Skill-install backups are kept unless `--purge`. The ChatGPT app
 is never modified. Without `--restart-app` the debugging port stays open until you quit
 and reopen ChatGPT yourself. `./install.sh --uninstall` does the same. Delete the repo
@@ -195,7 +217,8 @@ Files:
 
 Common cases:
 
-- **No bar after a normal launch** — expected; use `codex-limitbar` / Raycast.
+- **No bar after a normal launch** — use **Codex with LimitBar.app** (`./install.sh --app`)
+  or `codex-limitbar` / the Raycast Script Command.
 - **`REFUSING: port … is not owned by /Applications/ChatGPT.app`** — something else is
   listening on that port; the agent will not touch it. Quit ChatGPT and run `start.sh`
   again (it picks a fresh free port).

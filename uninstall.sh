@@ -8,8 +8,8 @@
 #   ./uninstall.sh --restart-app  # also quit and reopen ChatGPT normally (closes its debugging port)
 #
 # Removes: the running agent, the `codex-limitbar` command (only our symlink), the
-# Raycast script link, skill symlinks that point into this repo, the state dir and
-# logs. The ChatGPT app itself is never modified. The repo directory stays — delete
+# app launcher, Raycast script link, skill symlinks that point into this repo, state
+# and logs. The ChatGPT app itself is never modified. The repo directory stays — delete
 # it yourself afterwards.
 
 set -eu
@@ -95,6 +95,8 @@ default_link="$HOME/.config/raycast/scripts/codex-limitbar.sh"
 for link in "$recorded" "$default_link"; do
     [ -n "$link" ] || continue
     if points_into_repo "$link"; then act "remove $link" rm "$link"; fi
+    icon="$(dirname "$link")/spr-codex-icon.png"
+    if points_into_repo "$icon"; then act "remove $icon" rm "$icon"; fi
     [ "$recorded" = "$default_link" ] && break   # same path twice: handled
 done
 
@@ -110,9 +112,20 @@ for root in "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.cursor/skills" 
     fi
 done
 
-# 5. state and logs
+# 5. app launcher, state and logs
+LAUNCHER="${CODEX_LIMITBAR_LAUNCHER_DIR:-$HOME/Applications}/Codex with LimitBar.app"
+. "$REPO_DIR/lib/find-node.sh"
+if NODE="$(find_node)"; then
+    if [ "$DRY" -eq 1 ]; then
+        "$NODE" "$REPO_DIR/lib/launcher.mjs" check "$REPO_DIR" "$LAUNCHER"
+    else
+        "$NODE" "$REPO_DIR/lib/launcher.mjs" uninstall "$REPO_DIR" "$LAUNCHER"
+    fi
+elif [ -e "$LAUNCHER" ]; then
+    echo "note:  Node.js >= 22 is required to safely remove $LAUNCHER; remove it manually"
+fi
 [ -d "$STATE_DIR" ] && act "remove $STATE_DIR" rm -rf "$STATE_DIR"
-for f in "$HOME/Library/Logs/spr-limitbar.log" "$HOME/Library/Logs/spr-limitbar-bridge.log"; do
+for f in "$HOME/Library/Logs/spr-limitbar.log" "$HOME/Library/Logs/spr-limitbar-bridge.log" "$HOME/Library/Logs/spr-limitbar-launcher.log"; do
     [ -e "$f" ] && act "remove $f" rm -f "$f"
 done
 

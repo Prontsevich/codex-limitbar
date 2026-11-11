@@ -13,7 +13,7 @@
 
 # Optional parameters:
 # @raycast.packageName codex-limitbar
-# @raycast.icon 📊
+# @raycast.icon spr-codex-icon.png
 # @raycast.description Launch ChatGPT with the Codex rate-limit status bar (restarts it once if needed).
 # @raycast.author codex-limitbar
 
