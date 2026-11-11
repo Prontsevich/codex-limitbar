@@ -10,3 +10,6 @@ node_modules/
 # python
 __pycache__/
 *.pyc
+
+# Graphify output
+/graphify-out/
